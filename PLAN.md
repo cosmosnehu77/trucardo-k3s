@@ -2,7 +2,7 @@
 
 Este plan dice **qué se hace, en qué orden y cómo**. Los requisitos están en [REQUISITOS.md](REQUISITOS.md).
 
-El trabajo está partido en **issues completables**. Cada una está publicada en GitHub con el mismo número que tiene acá, de modo que `#5` en este plan es la issue #5 del repositorio.
+El trabajo está partido en **issues completables**. Cada una está publicada en GitHub con el mismo número que tiene acá, de modo que `#5` en este plan es la issue #5 del repositorio. GitHub numera issues y PRs con la misma secuencia: los números que no aparecen en el plan (#19, #20, …) son PRs.
 
 > [!IMPORTANT]
 > Si vas a trabajar en este repo, **leé primero la sección 1 completa**. Las reglas no son sugerencias: una issue que no las cumple no está terminada.
@@ -15,8 +15,8 @@ El trabajo está partido en **issues completables**. Cada una está publicada en
 
 | Principio | Qué significa acá |
 | --- | --- |
-| **YAGNI** | Sólo se hace lo que pide la issue en curso. Si aparece algo que «estaría bueno», se anota como issue nueva en la sección 8 de este plan y **no** se hace en la rama actual. La sección 7 de [REQUISITOS.md](REQUISITOS.md) lista lo que se dejó afuera a propósito. |
-| **DRY** | Cada decisión vive en un solo lugar. Las fuentes únicas de este proyecto son:<br>• lista de nodos → `TRUCARDO_NODOS`, leída con `nodo.config.nodos()`<br>• tiempos del cluster → `nodo/config.py`<br>• regla de puertos externos → una función del generador<br>• versión de k3s → el `compose.yaml` del cluster local<br>• nombre de la imagen → un parámetro del generador<br>Si para cambiar algo hay que tocar dos archivos, hay una duplicación que resolver. |
+| **YAGNI** | Sólo se hace lo que pide la issue en curso. Si aparece algo que «estaría bueno», se anota como issue nueva en la sección 10 de este plan y **no** se hace en la rama actual. La sección 7 de [REQUISITOS.md](REQUISITOS.md) lista lo que se dejó afuera a propósito. |
+| **DRY** | Cada decisión vive en un solo lugar. Las fuentes únicas de este proyecto son:<br>• lista de nodos → `TRUCARDO_NODOS`, leída con `nodo.config.nodos()`<br>• tiempos del cluster → `nodo/config.py`<br>• regla de puertos externos → una función del generador<br>• versión de k3s → el `compose.yaml` del cluster local<br>• nombre de la imagen → un parámetro del generador<br>• directorio de datos de un nodo → `TRUCARDO_DATOS` en el nodo, y una función del generador que arma la ruta de cada nodo en la máquina<br>• destino de la telemetría → `OTEL_EXPORTER_OTLP_ENDPOINT`, configurado en un solo módulo (`nodo/telemetria.py`)<br>Si para cambiar algo hay que tocar dos archivos, hay una duplicación que resolver. |
 | **Clean Code** | Se sigue la skill **`ub-mode`** de Robert C. Martin, versionada en `.claude/skills/ub-mode/`. Con Claude Code, se invoca con `/ub-mode` al empezar cada issue. Resumen: test que falla primero; el cambio más chico que lo hace pasar; después ordenar; una decisión en un lugar; validar los datos donde entran y adentro confiar; restar antes de sumar. |
 
 > [!NOTE]
@@ -196,6 +196,12 @@ Las toma el plan para que no se rediscutan en cada issue. Si una resulta equivoc
 | D9 | Anti-afinidad **preferida**, no obligatoria | Si fuera obligatoria, con una máquina caída el nodo reubicado no tendría dónde ir (RF-06) |
 | D10 | La imagen se carga directo en cada máquina (`docker save` → `k3s ctr images import`), con `imagePullPolicy: IfNotPresent` | Sin registro de imágenes (YAGNI) |
 | D11 | Cluster local: k3s en contenedores con `docker compose` e **IPs fijas** | Así se probó en la investigación. Con IPs dinámicas, un agente reiniciado cambia de IP y no vuelve |
+| D12 | El log persistente es opcional y se activa con `TRUCARDO_DATOS` | Sin la variable, el nodo es el del Proyecto 1 y los tests existentes no cambian (RF-17). `docker compose` y el generador la definen |
+| D13 | Formato en disco: un archivo **JSONL** de sólo agregado, una operación por línea, con `fsync` antes de confirmar. La época va en un archivo aparte que se reescribe de forma atómica (archivo temporal + `os.replace`) | Biblioteca estándar (RNF-07). Una operación confirmada tiene que estar en disco. Si el proceso muere a mitad de una línea, esa última línea incompleta se descarta al leer |
+| D14 | En k3s, volumen **`hostPath` por nodo** (`/var/lib/trucardo/nodo<id>`, tipo `DirectoryOrCreate`), no un PVC de `local-path` | Un PVC de `local-path` ata el Pod a su máquina: si se apaga, el Pod queda `Pending` y se rompe la reubicación (RF-05). Con `hostPath`, si el Pod se muda arranca con lo que haya en la máquina nueva y se pone al día por la red (RF-19). La ruta incluye el id para que dos nodos en la misma máquina no se pisen |
+| D15 | Recuperación al estilo **Raft**: el backup informa número y época de su última operación; si no coinciden con el log del primario, recorta hasta el último punto en común y recibe el resto. La elección compara (época de la última operación, número, id) | Con disco, dos logs del mismo largo pueden ser distintos. Es la regla de coincidencia de logs de Raft, reducida a lo que necesita Trucardo (RF-18) |
+| D16 | Telemetría configurada en **un solo módulo** (`nodo/telemetria.py`) con **un solo destino** OTLP. Mientras sólo haya trazas, el destino es Jaeger; al sumar métricas y logs, pasa a ser un *Collector* de OpenTelemetry que reparte a Jaeger, Prometheus y Loki | Los nodos no cambian cuando cambia el *backend*: sólo cambia una variable (RNF-03) |
+| D17 | Longhorn se instala con su **manifiesto oficial de versión fija** (`kubectl apply`), sin Helm. El generador elige el almacenamiento con `--almacenamiento hostpath\|longhorn`; por defecto, `hostpath` | YAGNI: Helm sería una herramienta más para un solo paquete. La opción deja intacto el despliegue recomendado |
 
 ---
 
@@ -364,18 +370,94 @@ Las toma el plan para que no se rediscutan en cada issue. Si una resulta equivoc
 
 ---
 
-## 6. Fase 3 — OpenTelemetry + Jaeger (extra)
+## 6. Fase 3 — Persistencia con volúmenes (recomendada)
 
 > [!NOTE]
-> **Fase opcional.** Se empieza sólo si la fase 2 está completa y queda tiempo antes de la entrega. Si no se llega, las issues quedan abiertas como trabajo futuro y se mencionan en el informe.
+> **Fase recomendada.** Va después de la fase 2 y antes de las extras: los volúmenes son parte de Kubernetes, y suman a la demo el experimento del apagón total. Si el plazo no alcanza, se entrega sin esta fase y se menciona en el informe.
+
+### #22 Log de operaciones en disco
+- **Requisitos:** RF-17, RNF-07
+- **Tipo:** código
+- **Depende de:** #10
+- **Qué hacer:**
+  - crear `nodo/disco.py`, el único módulo que lee y escribe el directorio de datos (D12, D13):
+    - agregar una operación al log;
+    - leer todas las operaciones guardadas;
+    - guardar y leer la época;
+  - si está `TRUCARDO_DATOS`, el nodo guarda cada operación **antes** de confirmarla: el primario, antes de responder al cliente; un backup, antes de dar el ack;
+  - al arrancar, el nodo aplica las operaciones guardadas y recupera su época, y recién después atiende pedidos.
+- **Criterios de aceptación:**
+  - un nodo que se detiene y vuelve con el mismo directorio tiene el mismo `ultimo_seq`, la misma época y las mismas mesas;
+  - sin la variable, el comportamiento y la suite son idénticos a antes.
+- **Tests** (`tests/test_disco.py`, con directorios temporales):
+  - lo que se guarda se lee igual y en orden;
+  - una última línea incompleta se descarta y el resto se lee;
+  - la época sobrevive a un reinicio;
+  - un nodo reiniciado con su directorio reconstruye las mismas mesas;
+  - una operación no se confirma si no se pudo escribir;
+  - sin `TRUCARDO_DATOS` no se escribe nada.
+
+### #23 Recuperación consistente desde el disco
+- **Requisitos:** RF-18, RF-20
+- **Tipo:** código
+- **Depende de:** #22
+- **Problema:** hoy, un nodo que vuelve viene vacío y nunca contradice a nadie. Con disco puede volver con operaciones que nadie más tiene. Ejemplo: un primario confirma la operación 41 y se cae antes de replicarla; el nuevo primario, en la época 1, escribe **otra** operación 41. El viejo vuelve diciendo «estoy en la 41», nadie nota que son distintas y las réplicas divergen en silencio.
+- **Qué hacer** (D15):
+  - el backup informa número **y época** de su última operación en los mensajes donde hoy informa `ultimo_seq`;
+  - el primario compara con su log. Si no coinciden, o si el backup va más adelante, le indica desde dónde recortar y le manda el resto en la puesta al día;
+  - el backup recorta el log en disco y en memoria, reconstruye su estado desde lo que quedó y aplica lo recibido;
+  - las credenciales de la elección pasan de (`ultimo_seq`, id) a (época de la última operación, `ultimo_seq`, id).
+- **Criterios de aceptación:**
+  - después de cualquier secuencia de caídas y vueltas con disco, los tres nodos terminan con el mismo log;
+  - tras un apagón total, gana la elección el nodo con el log más actualizado y las partidas siguen.
+- **Tests** (tres nodos en proceso, como en `tests/test_membresia.py`, cada uno con su directorio temporal):
+  - un backup que vuelve con su disco recibe sólo las operaciones que le faltan;
+  - un backup con una cola divergente la recorta y termina igual al primario;
+  - un log más corto pero de época mayor gana la elección a uno más largo de época menor;
+  - tras detener y volver a arrancar los tres nodos, las mesas siguen.
+
+### #24 Un volumen por nodo en docker compose y en k3s
+- **Requisitos:** RF-19
+- **Tipo:** código
+- **Depende de:** #23
+- **Qué hacer:**
+  - en `docker-compose.yml`: un volumen con nombre por nodo, montado en el directorio de `TRUCARDO_DATOS`;
+  - en el generador, para cada Deployment (D14):
+    - un volumen `hostPath` en `/var/lib/trucardo/nodo<id>`, tipo `DirectoryOrCreate`, armado por **una sola** función;
+    - montado en el contenedor y con `TRUCARDO_DATOS` apuntando al punto de montaje, ambos tomados de la misma constante;
+  - en el cluster local de #8: un volumen de Docker en `/var/lib/trucardo` de cada máquina simulada, para que el apagón total se pueda probar.
+- **Criterios de aceptación:** en el cluster local, un nodo reiniciado conserva su log; uno que se muda de máquina se pone al día por la red.
+- **Tests** (en `tests/test_manifiestos.py`):
+  - cada Deployment tiene su volumen `hostPath`, con una ruta distinta por nodo y tipo `DirectoryOrCreate`;
+  - el punto de montaje y `TRUCARDO_DATOS` coinciden;
+  - no aparece ningún PVC.
+
+### #25 Experimentos de persistencia
+- **Requisitos:** RF-12, RF-19, RF-20
+- **Tipo:** documentación
+- **Depende de:** #24
+- **Qué hacer:** sumar a `experimentos/README.md`:
+  1. reiniciar un backup: vuelve con su disco y la puesta al día empieza en su última operación, no en la 0;
+  2. un nodo que se muda de máquina: arranca con lo que haya en la máquina nueva y se pone al día;
+  3. **apagón total:** apagar las tres máquinas en medio de una partida y volver a encenderlas;
+  4. **límite:** una operación confirmada sin acks se descarta al recortar. Es el mismo problema del cerebro dividido: sin quórum, el disco no alcanza.
+- **Criterios de aceptación:** cada caso tiene su evidencia y la explicación de **por qué** pasó lo que pasó.
+- **Tests:** verificación reproducible (es el propio experimento).
+
+---
+
+## 7. Fase 4 — Observabilidad con OpenTelemetry (extra)
+
+> [!NOTE]
+> **Fase extra.** Se empieza sólo si las fases 2 y 3 están completas y queda tiempo antes de la entrega. Primero las trazas (#11 a #16), después métricas y logs (#26 a #29). Si no se llega, las issues quedan abiertas como trabajo futuro y se mencionan en el informe.
 
 ### #11 SDK de OpenTelemetry, opcional por entorno
 - **Requisitos:** RF-13, RNF-07
 - **Tipo:** código
-- **Depende de:** #10
+- **Depende de:** #10 (y #25 si se hizo la fase 3)
 - **Qué hacer:**
   - agregar las dependencias de OpenTelemetry (API, SDK y exportador OTLP por HTTP) con versión exacta;
-  - crear `nodo/trazas.py` con **un solo punto** de configuración:
+  - crear `nodo/telemetria.py` con **un solo punto** de configuración (D16):
     - si está `OTEL_EXPORTER_OTLP_ENDPOINT`, exporta con `service.name=trucardo-nodo<id>`;
     - si no, no hace nada.
 - **Criterios de aceptación:** sin la variable, el comportamiento y la suite son idénticos a antes.
@@ -420,14 +502,14 @@ Las toma el plan para que no se rediscutan en cada issue. Si una resulta equivoc
 - **Depende de:** #14
 - **Qué hacer:**
   - sumar Jaeger (`jaegertracing/jaeger` con versión fija) al `docker-compose.yml`;
-  - con una opción `--trazas`, el generador agrega:
+  - con una opción `--telemetria`, el generador agrega:
     - el Deployment y el Service de Jaeger, con la interfaz por NodePort según D6;
     - el destino OTLP en los nodos;
     - `OTEL_RESOURCE_ATTRIBUTES` con el Pod y la máquina, tomados de la *Downward API* de Kubernetes.
 - **Criterios de aceptación:** en el cluster local, cada *span* muestra `k8s.pod.name` y `k8s.node.name`.
 - **Tests:**
-  - sin `--trazas`, la salida es idéntica a la de #7;
-  - con `--trazas` aparecen Jaeger, el destino OTLP y los atributos tomados de la *Downward API*.
+  - sin `--telemetria`, la salida es idéntica a la de antes de esta issue;
+  - con `--telemetria` aparecen Jaeger, el destino OTLP y los atributos tomados de la *Downward API*.
 
 ### #16 Experimentos de falla con trazas
 - **Requisitos:** RF-12, RF-15, RF-16
@@ -441,14 +523,109 @@ Las toma el plan para que no se rediscutan en cada issue. Si una resulta equivoc
 - **Criterios de aceptación:** las capturas, con su explicación, están en el registro y en `experimentos/README.md`.
 - **Tests:** verificación reproducible.
 
+### #26 Métricas de dominio
+- **Requisitos:** RF-13, RF-21
+- **Tipo:** código
+- **Depende de:** #16
+- **Qué hacer:** en `nodo/telemetria.py`, sumar el proveedor de métricas con el mismo destino OTLP (D16), y medir:
+  - operaciones por tipo (contador) y latencia de confirmación (histograma);
+  - época y rol de cada nodo, y `ultimo_seq` (valores instantáneos);
+  - atraso de cada backup, visto desde el primario: su `ultimo_seq` menos el del backup;
+  - operaciones confirmadas con menos acks de los esperados: el indicador directo del riesgo de cerebro dividido;
+  - elecciones iniciadas y su duración, y latidos perdidos.
+- **Criterios de aceptación:** sin destino OTLP, nada cambia. Con destino, las métricas llegan con `service.name` y atributos de nodo.
+- **Tests** (con el lector de métricas en memoria del SDK):
+  - una jugada replicada suma al contador de su tipo y registra una latencia;
+  - el rol y la época cambian tras una elección;
+  - el atraso de un backup detenido crece;
+  - una operación confirmada sin acks suma a su contador.
+
+### #27 Logs correlacionados con las trazas
+- **Requisitos:** RF-13, RF-22
+- **Tipo:** código
+- **Depende de:** #26
+- **Qué hacer:**
+  - en `nodo/telemetria.py`, sumar al logger `trucardo` un manejador de OpenTelemetry, además del de consola;
+  - los datos del prefijo actual (nodo, rol, época, Lamport) salen de **una sola** función, que usan tanto la consola como los atributos del log exportado (DRY con `nodo/registro.py`);
+  - al tomar la issue, verificar si la API de logs de OpenTelemetry para Python es estable en la versión fijada. Si sigue siendo experimental, anotarlo en el registro.
+- **Criterios de aceptación:** la salida por consola es idéntica a antes. Una línea emitida dentro de un *span* se exporta con su `trace_id`.
+- **Tests:**
+  - una línea emitida dentro de un *span* lleva el `trace_id` y el `span_id` de ese *span*;
+  - lleva como atributos nodo, rol, época y Lamport;
+  - la línea de consola no cambia;
+  - sin destino OTLP no se exporta nada.
+
+### #28 Collector, Prometheus, Loki y Grafana
+- **Requisitos:** RF-21, RF-22, RF-23
+- **Tipo:** código
+- **Depende de:** #27
+- **Qué hacer:**
+  - sumar, con versión fija, un *Collector* de OpenTelemetry que recibe OTLP y reparte: trazas a Jaeger, métricas a Prometheus y logs a Loki;
+  - el destino OTLP de los nodos pasa a ser el Collector: cambia **un solo** valor (D16);
+  - Grafana con sus fuentes de datos (Prometheus, Loki y Jaeger) y un tablero de Trucardo, todo provisto por archivos: rol y época por nodo, atraso de cada backup, operaciones por segundo, latencia p99 y un panel de **primarios simultáneos**;
+  - desde una línea de log en Grafana, un enlace a su traza en Jaeger por `trace_id`;
+  - en `docker-compose.yml` y en el generador con `--telemetria`. La configuración del Collector se emite como JSON, que el Collector acepta porque YAML incluye a JSON (D2).
+- **Criterios de aceptación:** con una partida en curso, el tablero muestra los tres nodos, y desde un log se llega a su traza.
+- **Tests:**
+  - con `--telemetria` aparecen el Collector, Prometheus, Loki y Grafana;
+  - los nodos apuntan al Collector y no a Jaeger;
+  - la configuración del Collector tiene las tres canalizaciones con sus destinos;
+  - sin `--telemetria`, la salida no cambia.
+
+### #29 Experimentos con métricas y logs
+- **Requisitos:** RF-12, RF-21, RF-22
+- **Tipo:** documentación
+- **Depende de:** #28
+- **Qué hacer:** repetir experimentos de #10 con el tablero abierto y capturar:
+  - la caída del primario: la época sube, el rol cambia y el atraso vuelve a 0 tras la puesta al día;
+  - el cerebro dividido: el panel de primarios simultáneos marca 2, y crecen las operaciones confirmadas sin acks;
+  - un log como «declaro caído a N3» y el salto a su traza;
+  - una comparación con `kubectl logs` y `kubectl top`: qué agrega OpenTelemetry y qué ya daba Kubernetes.
+- **Criterios de aceptación:** las capturas, con su explicación, están en el registro y en `experimentos/README.md`.
+- **Tests:** verificación reproducible.
+
 ---
 
-## 7. Fase 4 — Entrega
+## 8. Fase 5 — Almacenamiento replicado con Longhorn (opcional)
+
+> [!NOTE]
+> **Fase opcional**, después de OpenTelemetry. Muestra la otra forma de no perder datos: en vez de que Trucardo se ponga al día por la red, el volumen viaja con el Pod. Sirve para comparar la réplica **en la aplicación** con la réplica **en el almacenamiento**.
+
+### #30 Volumen replicado con Longhorn
+- **Requisitos:** RF-24
+- **Tipo:** código
+- **Depende de:** #29 (o #25 si no se hizo la fase 4)
+- **Qué hacer:**
+  - verificar los requisitos de Longhorn en cada máquina (`open-iscsi`) y probar si corre en el cluster local. Si no corre, esta fase se prueba sólo en máquinas reales o VMs, y se anota en el registro;
+  - instalar Longhorn con su manifiesto oficial de versión fija (D17) y documentarlo en el README;
+  - configurar la política de Longhorn para Pods en una máquina caída, de modo que el volumen se libere y el Pod pueda arrancar en otra. Verificar el nombre exacto del ajuste en la versión fijada;
+  - en el generador, con `--almacenamiento longhorn`: un PVC por nodo (`ReadWriteOnce`, clase `longhorn`) montado en el **mismo** punto que el `hostPath` (misma constante), en lugar del `hostPath`.
+- **Criterios de aceptación:** con Longhorn, un nodo reiniciado conserva su log y, por defecto, el despliegue sigue siendo el de #24.
+- **Tests** (en `tests/test_manifiestos.py`):
+  - con `--almacenamiento longhorn`, un PVC por nodo con clase `longhorn` y `ReadWriteOnce`, y ningún `hostPath`;
+  - el punto de montaje es el mismo que con `hostPath`;
+  - sin la opción, la salida es idéntica a la de #24;
+  - un valor desconocido de `--almacenamiento` da error.
+
+### #31 Experimentos: el nodo se muda con su disco
+- **Requisitos:** RF-12, RF-25
+- **Tipo:** documentación
+- **Depende de:** #30
+- **Qué hacer:** sumar a `experimentos/README.md`:
+  - apagar la máquina de un backup y de un primario con Longhorn: el nodo vuelve en otra máquina **con su log** y la puesta al día es corta;
+  - medir el tiempo de reubicación y compararlo con RF-05 y con `hostPath`;
+  - discutir el costo: Trucardo ya replica en tres nodos y Longhorn vuelve a replicar cada volumen. En producción se elige **una** de las dos capas para replicar, y por qué.
+- **Criterios de aceptación:** cada caso tiene su evidencia y la explicación de **por qué** pasó lo que pasó.
+- **Tests:** verificación reproducible.
+
+---
+
+## 9. Fase 6 — Entrega
 
 ### #17 README final y prueba limpia desde cero
 - **Requisitos:** RNF-06 y los criterios de aceptación de la entrega (sección 8 de [REQUISITOS.md](REQUISITOS.md))
 - **Tipo:** documentación
-- **Depende de:** #10 (y #16 si se hizo la fase 3)
+- **Depende de:** #10, y la última issue de cada fase que se haya completado (#25, #29, #31)
 - **Qué hacer:**
   - completar el README: qué es, arquitectura en dos capas, cómo levantarlo, experimentos, límites y créditos al Proyecto 1;
   - clonar el repo en una carpeta vacía y seguir el README **al pie de la letra**.
@@ -457,9 +634,11 @@ Las toma el plan para que no se rediscutan en cada issue. Si una resulta equivoc
 
 ---
 
-## 8. Issues agregadas durante el trabajo
+## 10. Issues agregadas durante el trabajo
 
 Las que aparecen mientras se resuelve otra issue. Por YAGNI no se resuelven en la rama donde se descubren: se agregan acá, con su número de GitHub, y se ubican en el orden según su prioridad.
+
+Cuando lo que se agrega es una fase entera, sus issues van en su fase y acá queda sólo la issue de replanificación que las creó.
 
 ### #18 Test de membresía intermitente
 - **Requisitos:** RNF-01
@@ -473,17 +652,32 @@ Las que aparecen mientras se resuelve otra issue. Por YAGNI no se resuelven en l
 - **Criterios de aceptación:** la suite pasa 20 veces seguidas bajo carga.
 - **Tests:** el propio test corregido, más la verificación de las 20 corridas en el registro.
 
+### #21 Replanificación: volúmenes, métricas y logs, y Longhorn
+- **Requisitos:** RNF-02, RNF-05
+- **Tipo:** documentación
+- **Depende de:** #2
+- **Qué hacer:**
+  - sacar de «Fuera de alcance» la persistencia del log y las métricas y logs de OpenTelemetry, y reescribir por qué el *autoscaling* no aplica;
+  - agregar los requisitos RF-17 a RF-25 y las decisiones D12 a D17;
+  - agregar la fase 3 (persistencia, recomendada, #22 a #25), las métricas y logs a la fase de OpenTelemetry (#26 a #29) y la fase 5 (Longhorn, opcional, #30 y #31);
+  - renumerar las fases y sus etiquetas en GitHub, y actualizar calendario y estado.
+- **Criterios de aceptación:**
+  - cada issue nueva existe en GitHub con el mismo número que en el plan y la etiqueta de su fase;
+  - ninguna referencia entre documentos quedó apuntando a una sección que cambió de número.
+- **Tests:** no aplica (documentación). La suite tiene que pasar.
+
 ---
 
-## 9. Calendario sugerido
+## 11. Calendario sugerido
 
 | Día | Issues | Nota |
 | --- | --- | --- |
-| Mar 24/11 | #1, #2, #3, #4, #5 | Planificación y limpieza (hechas al crear el repo), verificación automática y primer código |
+| Mar 24/11 | #1, #2, #21, #3, #4, #5 | Planificación, limpieza y replanificación (hechas), verificación automática y primer código |
 | Mié 25/11 | #6, #7, #8, #9, #10 | Resto del generador, cluster local, máquinas reales y experimentos |
-| Jue 26/11 | #17 (+ fase 3 si sobra tiempo) | Prueba limpia y entrega. El informe se escribe en paralelo desde el martes, con los registros como insumo |
+| Jue 26/11 | #22 a #25, #17 | Persistencia (recomendada) a primera hora; después, prueba limpia y entrega. El informe se escribe en paralelo desde el martes, con los registros como insumo |
+| Después | #11 a #16, #26 a #29, #30 y #31 | Fases extra: si no entran antes de la entrega, quedan como trabajo futuro y se mencionan en el informe |
 
-## 10. Estado
+## 12. Estado
 
 | Issue | Título | Estado |
 | --- | --- | --- |
@@ -497,13 +691,26 @@ Las que aparecen mientras se resuelve otra issue. Por YAGNI no se resuelven en l
 | #8 | Cluster local de desarrollo | ⏳ |
 | #9 | Despliegue en máquinas reales | ⏳ |
 | #10 | Experimentos de falla en k3s | ⏳ |
+| #22 | Log de operaciones en disco (recomendada) | ⏳ |
+| #23 | Recuperación consistente desde el disco (recomendada) | ⏳ |
+| #24 | Un volumen por nodo en compose y k3s (recomendada) | ⏳ |
+| #25 | Experimentos de persistencia (recomendada) | ⏳ |
 | #11 | SDK de OpenTelemetry (extra) | ⏳ |
 | #12 | Contexto entre nodos e hilos (extra) | ⏳ |
 | #13 | Contexto cliente → nodo (extra) | ⏳ |
 | #14 | *Spans* de dominio (extra) | ⏳ |
 | #15 | Jaeger en compose y k3s (extra) | ⏳ |
 | #16 | Experimentos con trazas (extra) | ⏳ |
+| #26 | Métricas de dominio (extra) | ⏳ |
+| #27 | Logs correlacionados con las trazas (extra) | ⏳ |
+| #28 | Collector, Prometheus, Loki y Grafana (extra) | ⏳ |
+| #29 | Experimentos con métricas y logs (extra) | ⏳ |
+| #30 | Volumen replicado con Longhorn (opcional) | ⏳ |
+| #31 | Experimentos: el nodo se muda con su disco (opcional) | ⏳ |
 | #17 | README final y prueba limpia | ⏳ |
 | #18 | Test de membresía intermitente | ⏳ |
+| #21 | Replanificación: volúmenes, métricas y logs, y Longhorn | ✅ |
+
+La tabla sigue el **orden de trabajo**, no el numérico.
 
 Esta tabla se actualiza **en el commit de cada issue**: es parte del registro.

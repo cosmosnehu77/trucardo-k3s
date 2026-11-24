@@ -7,7 +7,9 @@ Tomamos **Trucardo** —el servicio de truco distribuido del Proyecto 1, con pri
 - **Kubernetes** se ocupa de que los procesos existan: los reinicia, los reubica cuando se apaga una máquina y los actualiza.
 - **Trucardo** sigue decidiendo quién es el primario y cuál es el estado de cada mesa.
 
-Como fase extra, se agregan trazas distribuidas con **OpenTelemetry + Jaeger**.
+Además:
+- **Fase recomendada:** cada nodo guarda su log en un **volumen**, así un apagón de las tres máquinas no pierde las partidas.
+- **Fases extra:** observabilidad con **OpenTelemetry** (trazas en Jaeger, métricas y logs en Grafana) y almacenamiento replicado con **Longhorn**, para que el nodo se mude de máquina con su disco.
 
 > [!NOTE]
 > **Estado:** en construcción. Hoy el repositorio contiene Trucardo tal como se entregó en el Proyecto 1 (tag `proyecto1-base`), más la planificación. El despliegue en k3s se construye issue por issue; ver la tabla de estado al final de [PLAN.md](PLAN.md).
