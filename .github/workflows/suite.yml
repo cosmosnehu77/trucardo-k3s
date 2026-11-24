@@ -1,0 +1,14 @@
+name: suite
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  suite:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Suite completa (el mismo script que el hook pre-commit)
+        run: .githooks/pre-commit
