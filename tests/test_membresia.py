@@ -25,26 +25,20 @@ def _puerto_libre():
         return s.getsockname()[1]
 
 
-def _armar(cluster, id_nodo, primario, jitter=JITTER, timeout_eleccion=TIMEOUT_ELECCION):
-    servidor = ServidorTruco(id_nodo=id_nodo, puntos=15, primario=primario)
+def _arrancar(cluster, id_nodo, jitter=JITTER, timeout_eleccion=TIMEOUT_ELECCION):
+    """Un nodo arrancado. Tambien sirve para revivir uno en el mismo puerto."""
+    servidor = ServidorTruco(id_nodo=id_nodo, puntos=15)
     membresia = Membresia(servidor, cluster, latido=LATIDO, timeout=TIMEOUT,
                           jitter=jitter, timeout_eleccion=timeout_eleccion)
     servidor._set_membresia(membresia)
-    return membresia
-
-
-def _arrancar(cluster, id_nodo, primario, jitter=JITTER,
-              timeout_eleccion=TIMEOUT_ELECCION):
-    """Un nodo arrancado. Tambien sirve para revivir uno en el mismo puerto."""
-    membresia = _armar(cluster, id_nodo, primario, jitter, timeout_eleccion)
     membresia.arrancar()
     return membresia
 
 
 def _cluster(**tiempos):
-    """Tres nodos; el primario es el 3, como en main()."""
+    """Tres nodos; al arrancar eligen primario, y gana el 3."""
     cluster = {i: Nodo(i, "127.0.0.1", 0, _puerto_libre()) for i in (1, 2, 3)}
-    return cluster, {i: _arrancar(cluster, i, 3, **tiempos) for i in cluster}
+    return cluster, {i: _arrancar(cluster, i, **tiempos) for i in cluster}
 
 
 class _Contar(logging.Handler):
@@ -80,6 +74,81 @@ def _registrando(funcion, momentos):
 def _apagar(membresias):
     for membresia in membresias.values():
         membresia.detener()
+
+
+def _primario(membresias):
+    primarios = [i for i, membresia in membresias.items() if membresia.nodo.rol == "primario"]
+    return primarios[0] if len(primarios) == 1 else None
+
+
+def _todos_en(membresias, ultimo_seq):
+    return all(membresia.nodo.estado.ultimo_seq == ultimo_seq
+               for membresia in membresias.values())
+
+
+# ---------- el arranque ----------
+
+
+def test_un_primario_reiniciado_vacio_no_vuelve_a_mandar():
+    cluster, membresias = _cluster()
+    try:
+        assert _esperar(lambda: _primario(membresias) is not None)
+        viejo = _primario(membresias)
+        assert _esperar(lambda: set(membresias[viejo].vivos) == set(cluster) - {viejo})
+        membresias[viejo].nodo.crear_partida("ana", "c0ffee" * 5)
+        assert _esperar(lambda: _todos_en(membresias, 1)), "la op tiene que llegar a todos"
+
+        membresias[viejo].detener()
+        membresias[viejo] = _arrancar(cluster, viejo)
+        assert membresias[viejo].nodo.rol == "backup", \
+            "arranca con el estado vacio: no se puede creer primario"
+        assert membresias[viejo].nodo.primario is None
+
+        assert _esperar(lambda: _primario(membresias) is not None and _todos_en(membresias, 1)), \
+            "tiene que quedar un solo primario y el reiniciado tiene que ponerse al dia"
+    finally:
+        _apagar(membresias)
+
+
+def test_tres_nodos_que_arrancan_juntos_eligen_uno_solo():
+    cluster, membresias = _cluster()
+    try:
+        assert _esperar(lambda: _primario(membresias) == 3), \
+            "con el mismo ultimo_seq tiene que ganar el id mayor, y uno solo"
+        assert _esperar(lambda: all(m.nodo.primario == 3 for m in membresias.values()))
+        assert len({m.nodo.epoca for m in membresias.values()}) == 1, \
+            "todos tienen que quedar en la misma epoca"
+        assert membresias[3].nodo.epoca > 0, "ganar la eleccion gasta una epoca"
+    finally:
+        _apagar(membresias)
+
+
+def test_un_nodo_solo_se_corona_al_arrancar():
+    cluster = {1: Nodo(1, "127.0.0.1", 0, _puerto_libre()),
+               2: Nodo(2, "127.0.0.1", 0, _puerto_libre())}
+    membresias = {1: _arrancar(cluster, 1)}
+    try:
+        assert _esperar(lambda: membresias[1].nodo.rol == "primario"), \
+            "si nadie contesta, el que arranco se tiene que coronar"
+        assert membresias[1].nodo.primario == 1
+    finally:
+        _apagar(membresias)
+
+
+def test_al_arrancar_no_anuncia_un_reintento():
+    contador = _Contar("reintento")
+    nivel = log.level
+    log.setLevel(logging.INFO)
+    log.addHandler(contador)
+    cluster = {1: Nodo(1, "127.0.0.1", 0, _puerto_libre())}
+    membresias = {1: _arrancar(cluster, 1)}
+    try:
+        assert _esperar(lambda: membresias[1].nodo.rol == "primario")
+        assert contador.n == 0, "la primera eleccion no es el reintento de ninguna"
+    finally:
+        log.removeHandler(contador)
+        log.setLevel(nivel)
+        _apagar(membresias)
 
 
 def test_tres_nodos_se_ven():
@@ -174,7 +243,7 @@ def test_si_el_ganador_muere_en_plena_eleccion_se_reintenta():
                2: Nodo(2, "127.0.0.1", 0, falso.puerto)}
     membresias = {}
     try:
-        membresias[1] = _arrancar(cluster, 1, primario=2)     # N2 nunca late
+        membresias[1] = _arrancar(cluster, 1)     # N2 nunca late
         intentos = []
         convocar = membresias[1].eleccion.convocar
 
@@ -226,9 +295,9 @@ def test_no_anuncia_reintento_mientras_la_eleccion_corre():
     contador = _Contar("reintento")
     nivel = log.level
     log.setLevel(logging.INFO)
-    log.addHandler(contador)
     try:
         assert _esperar(lambda: set(membresias[3].vivos) == {1, 2})
+        log.addHandler(contador)
         membresias[3].detener()
         assert _esperar(lambda: membresias[2].nodo.rol == "primario", limite=5.0)
         assert contador.n <= 2, (
@@ -271,10 +340,12 @@ def test_el_primario_depuesto_se_baja():
         assert _esperar(lambda: membresias[2].nodo.rol == "primario")
         epoca_nueva = membresias[2].nodo.epoca
 
-        membresias[3] = _armar(cluster, 3, primario=3)
-        assert membresias[3].nodo.rol == "primario", "vuelve creyendose primario"
+        membresias[3] = _arrancar(cluster, 3)
+        with membresias[3].nodo.lock:
+            membresias[3].nodo.rol = "primario"
+            membresias[3].nodo.primario = 3
+            membresias[3].nodo.epoca = 0
         assert membresias[3].nodo.epoca < epoca_nueva, "y con una epoca vieja"
-        membresias[3].arrancar()
 
         assert _esperar(lambda: membresias[3].nodo.rol == "backup"), \
             "el zombie se tiene que bajar solo"

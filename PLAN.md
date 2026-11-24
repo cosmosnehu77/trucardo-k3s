@@ -757,7 +757,7 @@ Cuando lo que se agrega es una fase entera, sus issues van en su fase y acá que
 | #1 | Planificación y reglas de trabajo | ✅ |
 | #2 | Limpieza del Proyecto 1 | ✅ |
 | #3 | Verificación automática de la suite | ✅ |
-| #4 | Arranque sin primario asumido | ⏳ |
+| #4 | Arranque sin primario asumido | ✅ |
 | #38 | Elección trabada entre candidatos de épocas distintas | ⏳ |
 | #39 | Tests de membresía que miran estados transitorios | ⏳ |
 | #5 | Generador de manifiestos | ⏳ |

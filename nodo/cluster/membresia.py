@@ -41,6 +41,9 @@ class Membresia:
     # ---------- arrancar y parar ----------
 
     def arrancar(self):
+        with self.nodo.lock:
+            self.nodo.rol = "backup"
+            self.sin_primario()
         yo = self.cluster[self.nodo.id_nodo]
         self._escucha = transporte.Escucha(yo.puerto_cluster, self.despachar)
         self.latido.arrancar_hilos()

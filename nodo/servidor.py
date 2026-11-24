@@ -240,7 +240,7 @@ def main():
         cluster = config.nodos()
         if id_nodo not in cluster:
             sys.exit(f"el nodo {id_nodo} no esta en TRUCARDO_NODOS (estan: {sorted(cluster)})")
-        servidor = ServidorTruco(id_nodo, primario=max(cluster))
+        servidor = ServidorTruco(id_nodo)
     except ValueError as error:
         sys.exit(f"configuracion invalida: {error}")
     yo = cluster[id_nodo]
@@ -258,8 +258,8 @@ def main():
     daemon.register(servidor, NOMBRE_OBJETO)
     log.info(f"escuchando en PYRO:{NOMBRE_OBJETO}@<tu-ip>:{yo.puerto_pyro} "
              f"· cluster en el puerto {yo.puerto_cluster} · mesas a {servidor.puntos} puntos")
-    log.info(f"nodos {sorted(cluster)} · arranca de primario N{servidor.primario} "
-             f"(el de id mayor); si se cae, los demas eligen otro")
+    log.info(f"nodos {sorted(cluster)} · arranco de backup y sin primario: se elige uno "
+             f"(gana el mas al dia y, si empatan, el de id mayor)")
     log.info("Ctrl+C para salir.")
     try:
         daemon.requestLoop()
