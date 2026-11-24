@@ -25,13 +25,18 @@ def _puerto_libre():
         return s.getsockname()[1]
 
 
-def _arrancar(cluster, id_nodo, primario, jitter=JITTER,
-              timeout_eleccion=TIMEOUT_ELECCION):
-    """Un nodo arrancado. Tambien sirve para revivir uno en el mismo puerto."""
+def _armar(cluster, id_nodo, primario, jitter=JITTER, timeout_eleccion=TIMEOUT_ELECCION):
     servidor = ServidorTruco(id_nodo=id_nodo, puntos=15, primario=primario)
     membresia = Membresia(servidor, cluster, latido=LATIDO, timeout=TIMEOUT,
                           jitter=jitter, timeout_eleccion=timeout_eleccion)
     servidor._set_membresia(membresia)
+    return membresia
+
+
+def _arrancar(cluster, id_nodo, primario, jitter=JITTER,
+              timeout_eleccion=TIMEOUT_ELECCION):
+    """Un nodo arrancado. Tambien sirve para revivir uno en el mismo puerto."""
+    membresia = _armar(cluster, id_nodo, primario, jitter, timeout_eleccion)
     membresia.arrancar()
     return membresia
 
@@ -65,6 +70,13 @@ def _esperar(condicion, limite=3.0):
     return False
 
 
+def _registrando(funcion, momentos):
+    def registrada():
+        momentos.append(time.monotonic())
+        funcion()
+    return registrada
+
+
 def _apagar(membresias):
     for membresia in membresias.values():
         membresia.detener()
@@ -89,13 +101,17 @@ def test_si_el_primario_deja_de_latir_los_backups_lo_detectan():
     cluster, membresias = _cluster()
     try:
         assert _esperar(lambda: set(membresias[3].vivos) == {1, 2})
+        detecciones = []
+        for i in (1, 2):
+            membresias[i].sin_primario = _registrando(membresias[i].sin_primario, detecciones)
         membresias[3].detener()
         muerto = time.monotonic()
 
-        assert _esperar(lambda: all(membresias[i].nodo.primario is None for i in (1, 2))), \
-            "los backups lo tienen que dar por caido"
+        assert _esperar(lambda: all(membresias[i].nodo.primario != 3 for i in (1, 2))), \
+            "los backups tienen que dejar de seguirlo"
+        assert detecciones, "alguno lo tiene que dar por caido por el silencio"
         # el ultimo latido pudo llegar hasta un latido antes de detenerlo
-        assert time.monotonic() - muerto >= TIMEOUT - LATIDO, "y no antes del timeout"
+        assert min(detecciones) - muerto >= TIMEOUT - LATIDO, "y no antes del timeout"
     finally:
         _apagar(membresias)
 
@@ -255,14 +271,16 @@ def test_el_primario_depuesto_se_baja():
         assert _esperar(lambda: membresias[2].nodo.rol == "primario")
         epoca_nueva = membresias[2].nodo.epoca
 
-        membresias[3] = _arrancar(cluster, 3, primario=3)
+        membresias[3] = _armar(cluster, 3, primario=3)
         assert membresias[3].nodo.rol == "primario", "vuelve creyendose primario"
         assert membresias[3].nodo.epoca < epoca_nueva, "y con una epoca vieja"
+        membresias[3].arrancar()
 
         assert _esperar(lambda: membresias[3].nodo.rol == "backup"), \
             "el zombie se tiene que bajar solo"
-        assert membresias[3].nodo.epoca == epoca_nueva, "y ponerse al dia con la epoca"
-        assert membresias[3].nodo.primario == 2
+        assert _esperar(lambda: membresias[3].nodo.primario == 2
+                        and membresias[3].nodo.epoca == membresias[2].nodo.epoca), \
+            "y seguir al primario de verdad, en su epoca"
         assert _esperar(lambda: 3 in membresias[2].vivos), \
             "y volver a entrar a la vista del primario de verdad"
     finally:

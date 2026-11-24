@@ -700,6 +700,45 @@ Cuando lo que se agrega es una fase entera, sus issues van en su fase y acá que
 - **Criterios de aceptación:** la suite pasa en la imagen nueva, con el *hook* y en la verificación del PR; OpenTelemetry 1.45.2 (fase 4) se instala en la imagen nueva.
 - **Tests:** verificación reproducible (es configuración): la suite completa en la imagen nueva y la instalación de OpenTelemetry.
 
+### #38 Elección trabada entre candidatos de épocas distintas
+- **Requisitos:** RF-08, RF-10
+- **Tipo:** código
+- **Depende de:** #4
+- **Prioridad:** inmediatamente después de #4. Las elecciones al arrancar hacen más probable que dos backups queden un rato en épocas distintas.
+- **Problema:** en `Eleccion._al_eleccion`, un nodo le gana a un candidato si `su_epoca < mi_epoca` **o** si sus credenciales (`ultimo_seq`, id) son mayores. Supongamos N1 en la época 2 y N2 en la 1, con el mismo `ultimo_seq`:
+  - N2 le contesta «mando yo» a N1, porque tiene id mayor;
+  - N1 le contesta «mando yo» a N2, porque tiene época mayor;
+  - los dos se retiran a esperar un `COORDINADOR` que nadie manda;
+  - al vencer `TIMEOUT_ELECCION` reintentan y se repite, porque recibir una `ELECCION` no actualiza la época del que la recibe.
+  
+  Sólo se destraba si alguna respuesta se pierde por *timeout*.
+- **Cómo se vio:** leyendo el código, durante la #18. En 1 de 20 corridas de la suite bajo carga, `test_no_anuncia_reintento_mientras_la_eleccion_corre` contó 9 reintentos, y no se repitió en 30 corridas sueltas. **No está confirmado** que esa falla venga de acá.
+- **Qué hacer:**
+  - primero, un test que reproduzca la contestación cruzada con dos nodos en épocas distintas, llamando a los manejadores (determinístico);
+  - después, que la comparación sea un **orden total**, igual desde los dos lados. Hay dos opciones:
+    - que quien recibe una `ELECCION` de una época mayor adopte esa época antes de comparar;
+    - comparar (época, `ultimo_seq`, id) como una sola tupla.
+  
+  Se elige en la issue, de modo que no choque con la regla de la #23.
+- **Criterios de aceptación:** dos candidatos en épocas distintas terminan con un solo primario sin depender de *timeouts*.
+- **Tests:**
+  - el de la contestación cruzada, que tiene que fallar antes del cambio;
+  - uno con dos nodos reales en épocas distintas que eligen un solo primario.
+
+### #39 Tests de membresía que miran estados transitorios
+- **Requisitos:** RNF-01
+- **Tipo:** código
+- **Depende de:** #38
+- **Problema:** varios tests de `tests/test_membresia.py` verifican un estado **en el instante** en que se cumple otra condición, con latidos de 0,1 s. Si el cluster sigue moviéndose (otro latido, una nueva elección), fallan aunque el protocolo haga lo correcto. En la #18 se corrigieron dos tests de este tipo. Quedaron fallas aisladas:
+  - `test_el_primario_depuesto_se_baja`, en «volver a entrar a la vista»: 1 de 20 corridas de la suite, con las 12 CPU ocupadas;
+  - `test_tres_nodos_se_ven`: 1 de 20 corridas sin carga.
+- **Qué hacer:**
+  - revisar cada test de membresía y separar lo que es una **garantía** del protocolo, que se espera con `_esperar`, de lo que es un **instante**, que no se verifica;
+  - reproducir cada falla antes de corregirla, y anotar en el registro qué estado tenía el cluster;
+  - si alguna falla resulta ser un bug del protocolo y no del test, abrir una issue aparte.
+- **Criterios de aceptación:** la suite pasa 20 veces seguidas con las 12 CPU ocupadas.
+- **Tests:** los propios tests corregidos, más la verificación de las 20 corridas en el registro.
+
 ---
 
 ## 11. Calendario sugerido
@@ -707,7 +746,7 @@ Cuando lo que se agrega es una fase entera, sus issues van en su fase y acá que
 | Día | Issues | Nota |
 | --- | --- | --- |
 | Mar 24/11 | #1, #2, #21, #33, #3, #36, #4, #5 | Planificación, limpieza, replanificación, regla de comentarios, verificación automática y Python 3.15 (hechas), y primer código |
-| Mié 25/11 | #6, #7, #8, #9, #10 | Resto del generador, cluster local, máquinas reales y experimentos |
+| Mié 25/11 | #38, #39, #6, #7, #8, #9, #10 | Resto del generador, cluster local, máquinas reales y experimentos |
 | Jue 26/11 | #22 a #25, #17 | Persistencia (recomendada) a primera hora; después, prueba limpia y entrega. El informe se escribe en paralelo desde el martes, con los registros como insumo |
 | Después | #11 a #16, #26 a #29, #30 y #31 | Fases extra: si no entran antes de la entrega, quedan como trabajo futuro y se mencionan en el informe |
 
@@ -719,6 +758,8 @@ Cuando lo que se agrega es una fase entera, sus issues van en su fase y acá que
 | #2 | Limpieza del Proyecto 1 | ✅ |
 | #3 | Verificación automática de la suite | ✅ |
 | #4 | Arranque sin primario asumido | ⏳ |
+| #38 | Elección trabada entre candidatos de épocas distintas | ⏳ |
+| #39 | Tests de membresía que miran estados transitorios | ⏳ |
 | #5 | Generador de manifiestos | ⏳ |
 | #6 | Acceso de clientes desde fuera del cluster | ⏳ |
 | #7 | Tolerancia a fallas de infraestructura | ⏳ |
@@ -742,7 +783,7 @@ Cuando lo que se agrega es una fase entera, sus issues van en su fase y acá que
 | #30 | Volumen replicado con Longhorn (opcional) | ⏳ |
 | #31 | Experimentos: el nodo se muda con su disco (opcional) | ⏳ |
 | #17 | README final y prueba limpia | ⏳ |
-| #18 | Test de membresía intermitente | ⏳ |
+| #18 | Test de membresía intermitente | ✅ |
 | #21 | Replanificación: volúmenes, métricas y logs, y Longhorn | ✅ |
 | #33 | Regla de comentarios en el código | ✅ |
 | #36 | Imagen con Python 3.15 | ✅ |
