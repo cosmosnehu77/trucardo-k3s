@@ -42,11 +42,19 @@ docker compose run --rm cliente leo
 docker compose run --rm cliente beto
 ```
 
-Correr la suite de tests:
+Correr la suite de tests (`--build` hace que la imagen tome el código actual):
 
 ```bash
-docker compose run --rm tests
+docker compose run --build --rm tests
 ```
+
+Una vez por clon, activar el *hook* que corre la suite antes de cada commit y lo rechaza si falla:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+En GitHub, cada PR corre el mismo *hook* como verificación (`.github/workflows/suite.yml`).
 
 La guía completa del Proyecto 1 está en el [README del tag `proyecto1-base`](https://github.com/cosmosnehu77/trucardo-k3s/blob/proyecto1-base/README.md). Ahí se explica cómo jugar, cómo correrlo en varias computadoras sin Kubernetes, cómo matar al primario y cómo seguir una partida.
 

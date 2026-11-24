@@ -1,0 +1,9 @@
+#!/bin/sh
+salida=$(docker compose run --build --rm tests 2>&1)
+estado=$?
+if [ $estado -ne 0 ]; then
+    printf '%s\n' "$salida"
+    echo "Commit rechazado: la suite no pasa." >&2
+    exit $estado
+fi
+printf '%s\n' "$salida" | tail -n 1

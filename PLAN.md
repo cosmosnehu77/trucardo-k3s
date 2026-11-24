@@ -101,17 +101,26 @@ Se hace **siempre** en este orden. Los comandos asumen que estás en la raíz de
   ```
 
   ```bash
-  docker compose run --rm tests
+  docker compose run --build --rm tests
   ```
 
-  Los dos corren lo mismo. Para el primero hacen falta las dependencias de `requirements.txt` instaladas.
+  Los dos corren lo mismo. Para el primero hacen falta Python 3.10 y las dependencias de `requirements.txt`. El segundo no necesita nada más que Docker. Lleva `--build` porque la imagen copia el código adentro: sin reconstruirla, se probaría el código de la última vez que se construyó.
 - **Toda issue que cambia código Python** trae tests unitarios **de ese cambio**, escritos **antes** que el código.
 - **Qué es un buen test acá** (`ub-mode`):
   - llama al código como lo haría quien lo usa y verifica lo que esa persona vería;
   - si seguiría pasando aunque todas las funciones devolvieran nada, no sirve;
   - si un test honesto no es posible, no se escribe uno malo.
 - **Issues sin código Python** (infraestructura o documentación): no agregan tests, porque un test de un archivo de configuración no prueba nada útil. En su lugar llevan una **verificación reproducible**: los comandos que se corrieron y su salida, pegados en el registro. La issue lo aclara en su campo *Tests*. Igual tienen que pasar la suite completa.
-- **Regla de oro: no se commitea con la suite en rojo.** Desde la issue #3, un *hook* de Git lo impide en la computadora y una verificación en GitHub lo impide en el PR.
+- **Regla de oro: no se commitea con la suite en rojo.** Desde la issue #3:
+  - en la computadora, el *hook* `.githooks/pre-commit` corre la suite con Docker y rechaza el commit si falla. Se activa **una vez por clon**:
+
+    ```bash
+    git config core.hooksPath .githooks
+    ```
+
+  - en GitHub, el *workflow* `.github/workflows/suite.yml` corre **el mismo script** en cada PR y en cada push a `main`. Un PR con la verificación en rojo no se mergea;
+  - el *hook* prueba los archivos tal como están en la carpeta, no sólo lo que está en el *stage*. Como cada issue lleva un solo commit con todo, en la práctica es lo mismo;
+  - `git commit --no-verify` saltea el *hook*, pero el PR lo vuelve a verificar. No se usa.
 
 ### 1.5. Commit
 
@@ -697,7 +706,7 @@ Cuando lo que se agrega es una fase entera, sus issues van en su fase y acá que
 | --- | --- | --- |
 | #1 | Planificación y reglas de trabajo | ✅ |
 | #2 | Limpieza del Proyecto 1 | ✅ |
-| #3 | Verificación automática de la suite | ⏳ |
+| #3 | Verificación automática de la suite | ✅ |
 | #4 | Arranque sin primario asumido | ⏳ |
 | #5 | Generador de manifiestos | ⏳ |
 | #6 | Acceso de clientes desde fuera del cluster | ⏳ |
