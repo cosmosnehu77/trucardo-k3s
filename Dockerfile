@@ -16,6 +16,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY juego/ juego/
 COPY nodo/ nodo/
 COPY cliente/ cliente/
+COPY despliegue/ despliegue/
 COPY tests/ tests/
 COPY run_tests.py demo.py ./
 

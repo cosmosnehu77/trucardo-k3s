@@ -22,9 +22,13 @@ class Nodo(NamedTuple):
     puerto_cluster: int
 
 
+def texto_nodos():
+    return os.environ.get("TRUCARDO_NODOS", NODOS_POR_DEFECTO)
+
+
 def nodos(texto=None):
     if texto is None:
-        texto = os.environ.get("TRUCARDO_NODOS", NODOS_POR_DEFECTO)
+        texto = texto_nodos()
 
     cluster = {}
     for entrada in texto.split(","):
