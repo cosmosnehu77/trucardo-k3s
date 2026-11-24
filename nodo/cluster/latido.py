@@ -97,7 +97,10 @@ class Latido:
                         time.monotonic() - self.m.eleccion_desde < self.m.timeout_eleccion)
                     if en_curso:
                         continue
-                    log.info("sigo sin primario y la eleccion no termino: reintento")
+                    if self.m.eleccion_desde is None:
+                        log.info("no conozco al primario: convoco una eleccion")
+                    else:
+                        log.info("sigo sin primario y la eleccion no termino: reintento")
 
                 else:
                     silencio = time.monotonic() - self.m.ultimo_latido
