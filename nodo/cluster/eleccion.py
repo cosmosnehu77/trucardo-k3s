@@ -68,17 +68,16 @@ class Eleccion:
         self.m.preguntar_a_todos(aviso)
 
     def _credenciales(self):
-        return (self.m.nodo.estado.ultimo_seq, self.m.nodo.id_nodo)
+        return (self.m.nodo.epoca, self.m.nodo.estado.ultimo_seq, self.m.nodo.id_nodo)
 
     # ---------- contestarle a los demas ----------
 
     def _al_eleccion(self, mensaje):
-        suyas = (mensaje.get("ultimo_seq", 0), mensaje["origen"])
-        su_epoca = mensaje.get("epoca", 0)
+        suyas = (mensaje.get("epoca", 0), mensaje.get("ultimo_seq", 0), mensaje["origen"])
 
         with self.m.nodo.lock:
             mias = self._credenciales()
-            le_gano = su_epoca < self.m.nodo.epoca or mias > suyas
+            le_gano = mias > suyas
             if not le_gano:
                 self.m.eleccion_desde = time.monotonic()
             respuesta = self.m.respuesta(mando_yo=le_gano)
