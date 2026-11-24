@@ -18,6 +18,7 @@ El trabajo está partido en **issues completables**. Cada una está publicada en
 | **YAGNI** | Sólo se hace lo que pide la issue en curso. Si aparece algo que «estaría bueno», se anota como issue nueva en la sección 10 de este plan y **no** se hace en la rama actual. La sección 7 de [REQUISITOS.md](REQUISITOS.md) lista lo que se dejó afuera a propósito. |
 | **DRY** | Cada decisión vive en un solo lugar. Las fuentes únicas de este proyecto son:<br>• lista de nodos → `TRUCARDO_NODOS`, leída con `nodo.config.nodos()`<br>• tiempos del cluster → `nodo/config.py`<br>• regla de puertos externos → una función del generador<br>• versión de k3s → el `compose.yaml` del cluster local<br>• nombre de la imagen → un parámetro del generador<br>• directorio de datos de un nodo → `TRUCARDO_DATOS` en el nodo, y una función del generador que arma la ruta de cada nodo en la máquina<br>• destino de la telemetría → `OTEL_EXPORTER_OTLP_ENDPOINT`, configurado en un solo módulo (`nodo/telemetria.py`)<br>Si para cambiar algo hay que tocar dos archivos, hay una duplicación que resolver. |
 | **Clean Code** | Se sigue la skill **`ub-mode`** de Robert C. Martin, versionada en `.claude/skills/ub-mode/`. Con Claude Code, se invoca con `/ub-mode` al empezar cada issue. Resumen: test que falla primero; el cambio más chico que lo hace pasar; después ordenar; una decisión en un lugar; validar los datos donde entran y adentro confiar; restar antes de sumar. |
+| **Comentarios** | En el código **nuevo**, un comentario (o *docstring*) se escribe sólo cuando es **imprescindible o claramente útil**: el *por qué* de algo que el código no puede decir solo. Por ejemplo, una restricción externa, un valor que parece arbitrario o una trampa conocida. El *qué* y el *cómo* los dicen los nombres y la estructura del código. La historia y la justificación de cada cambio ya quedan en la issue y en su registro de construcción, así que no se repiten en comentarios (DRY).<br>Los comentarios que **ya existen** en el código del Proyecto 1 **no se tocan**: ni se borran ni se reescriben. Única excepción: si una issue cambia el código que un comentario describe y el comentario queda falso, se corrige lo mínimo y se anota en el registro. |
 
 > [!NOTE]
 > La skill menciona tres herramientas de Uncle Bob (*crapper*, *dryer*, *mutator*). **No se instalan:** no está verificado que soporten Python y el plazo es corto. Sus umbrales —funciones simples y cubiertas, sin bloques duplicados, sin código muerto— se revisan a mano en cada PR. Si después hacen falta, se agrega una issue.
@@ -176,6 +177,7 @@ Una issue está terminada cuando se cumple **todo** esto:
 - [ ] El PR está mergeado y la issue cerrada (con `Closes #NN`).
 - [ ] La rama de la issue anterior fue borrada (local y remota).
 - [ ] No se agregó nada que la issue no pidiera (YAGNI) ni se duplicó ninguna decisión (DRY).
+- [ ] El código nuevo sólo tiene los comentarios imprescindibles, y los comentarios existentes siguen como estaban (ver 1.1).
 
 ---
 
@@ -666,13 +668,25 @@ Cuando lo que se agrega es una fase entera, sus issues van en su fase y acá que
   - ninguna referencia entre documentos quedó apuntando a una sección que cambió de número.
 - **Tests:** no aplica (documentación). La suite tiene que pasar.
 
+### #33 Regla de comentarios en el código
+- **Requisitos:** RNF-04, RNF-10
+- **Tipo:** documentación
+- **Depende de:** #21
+- **Qué hacer:**
+  - agregar la regla de comentarios a los principios del plan (sección 1.1), a la definición de terminado (1.8) y como RNF-10 en los requisitos:
+    - en el código nuevo, un comentario sólo cuando es imprescindible o claramente útil;
+    - los comentarios existentes del Proyecto 1 no se tocan;
+    - el porqué de cada cambio vive en la issue y su registro de construcción, no en comentarios.
+- **Criterios de aceptación:** la regla está en el plan, en los requisitos y en la definición de terminado.
+- **Tests:** no aplica (documentación). La suite tiene que pasar.
+
 ---
 
 ## 11. Calendario sugerido
 
 | Día | Issues | Nota |
 | --- | --- | --- |
-| Mar 24/11 | #1, #2, #21, #3, #4, #5 | Planificación, limpieza y replanificación (hechas), verificación automática y primer código |
+| Mar 24/11 | #1, #2, #21, #33, #3, #4, #5 | Planificación, limpieza, replanificación y regla de comentarios (hechas), verificación automática y primer código |
 | Mié 25/11 | #6, #7, #8, #9, #10 | Resto del generador, cluster local, máquinas reales y experimentos |
 | Jue 26/11 | #22 a #25, #17 | Persistencia (recomendada) a primera hora; después, prueba limpia y entrega. El informe se escribe en paralelo desde el martes, con los registros como insumo |
 | Después | #11 a #16, #26 a #29, #30 y #31 | Fases extra: si no entran antes de la entrega, quedan como trabajo futuro y se mencionan en el informe |
@@ -710,6 +724,7 @@ Cuando lo que se agrega es una fase entera, sus issues van en su fase y acá que
 | #17 | README final y prueba limpia | ⏳ |
 | #18 | Test de membresía intermitente | ⏳ |
 | #21 | Replanificación: volúmenes, métricas y logs, y Longhorn | ✅ |
+| #33 | Regla de comentarios en el código | ✅ |
 
 La tabla sigue el **orden de trabajo**, no el numérico.
 
