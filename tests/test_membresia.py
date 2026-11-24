@@ -10,6 +10,7 @@ from nodo import transporte
 from nodo.config import Nodo
 from nodo.errores import NoPrimario
 from nodo.cluster import Membresia
+from nodo.cluster.protocolo import ELECCION
 from nodo.registro import log
 from nodo.servidor import ServidorTruco
 
@@ -25,12 +26,17 @@ def _puerto_libre():
         return s.getsockname()[1]
 
 
-def _arrancar(cluster, id_nodo, jitter=JITTER, timeout_eleccion=TIMEOUT_ELECCION):
-    """Un nodo arrancado. Tambien sirve para revivir uno en el mismo puerto."""
+def _membresia(cluster, id_nodo, jitter=JITTER, timeout_eleccion=TIMEOUT_ELECCION):
     servidor = ServidorTruco(id_nodo=id_nodo, puntos=15)
     membresia = Membresia(servidor, cluster, latido=LATIDO, timeout=TIMEOUT,
                           jitter=jitter, timeout_eleccion=timeout_eleccion)
     servidor._set_membresia(membresia)
+    return membresia
+
+
+def _arrancar(cluster, id_nodo, jitter=JITTER, timeout_eleccion=TIMEOUT_ELECCION):
+    """Un nodo arrancado. Tambien sirve para revivir uno en el mismo puerto."""
+    membresia = _membresia(cluster, id_nodo, jitter, timeout_eleccion)
     membresia.arrancar()
     return membresia
 
@@ -406,5 +412,51 @@ def test_el_zombie_que_replica_se_entera_y_se_baja():
         assert zombie.epoca >= 5, "y adoptar la epoca de los que lo rechazaron"
         assert all(membresias[i].nodo.estado.ultimo_seq == 0 for i in (1, 2)), \
             "los backups no pueden aplicar la op de un zombie"
+    finally:
+        _apagar(membresias)
+
+
+# ---------- eleccion entre epocas distintas ----------
+
+
+def test_dos_candidatos_de_epocas_distintas_no_se_contestan_mando_yo_los_dos():
+    cluster = {i: Nodo(i, "127.0.0.1", 0, _puerto_libre()) for i in (1, 2)}
+    membresias = {i: _membresia(cluster, i) for i in cluster}
+    for membresia in membresias.values():
+        membresia.eleccion.convocar_aparte = lambda: None
+
+    membresias[1].nodo.epoca = 2
+    membresias[2].nodo.epoca = 1
+
+    pedido_1 = membresias[1].mensaje(ELECCION, ultimo_seq=membresias[1].nodo.estado.ultimo_seq)
+    pedido_2 = membresias[2].mensaje(ELECCION, ultimo_seq=membresias[2].nodo.estado.ultimo_seq)
+
+    respuesta_de_2 = membresias[2].eleccion._al_eleccion(pedido_1)
+    respuesta_de_1 = membresias[1].eleccion._al_eleccion(pedido_2)
+
+    assert respuesta_de_1["mando_yo"] is True, "el de epoca mayor le tiene que ganar"
+    assert respuesta_de_2["mando_yo"] is False, "el de epoca menor no le puede contestar mando_yo"
+
+
+def test_dos_nodos_en_epocas_distintas_eligen_un_solo_primario():
+    cluster = {i: Nodo(i, "127.0.0.1", 0, _puerto_libre()) for i in (1, 2)}
+    membresias = {i: _arrancar(cluster, i, timeout_eleccion=30) for i in cluster}
+    try:
+        assert _esperar(lambda: _primario(membresias) is not None
+                        and all(m.nodo.primario == _primario(membresias)
+                                and not m.eleccion.convocando
+                                for m in membresias.values()))
+        for i, epoca in ((2, 3), (1, 5)):
+            with membresias[i].nodo.lock:
+                membresias[i].nodo.rol = "backup"
+                membresias[i].sin_primario()
+                membresias[i].nodo.epoca = epoca
+        for i in (1, 2):
+            membresias[i].eleccion.convocar_aparte()
+
+        assert _esperar(lambda: _primario(membresias) is not None
+                        and all(m.nodo.primario == _primario(membresias)
+                                for m in membresias.values()),
+                        limite=3), "tiene que quedar un solo primario reconocido por los dos"
     finally:
         _apagar(membresias)
