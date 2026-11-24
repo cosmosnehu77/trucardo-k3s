@@ -1,5 +1,5 @@
 # Una sola imagen para todo: nodos, clientes, herramientas y tests.
-FROM python:3.10-slim
+FROM python:3.15-slim
 
 # TZ: hora argentina en los logs, sin depender de tzdata
 ENV PYTHONUNBUFFERED=1 \
