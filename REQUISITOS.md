@@ -103,6 +103,7 @@ Los códigos no se renumeran: los requisitos que se agregan después reciben el 
 | **RNF-07** | **Dependencias mínimas.** No se agrega una dependencia si la biblioteca estándar alcanza. Toda dependencia nueva se fija con versión exacta y se justifica en el registro. |
 | **RNF-08** | **Tiempos coherentes entre capas.** Trucardo decide primero (detecta la caída del primario a los 3 s) y Kubernetes repara después: su detección tiene que ser más lenta que la de Trucardo. |
 | **RNF-09** | **Estilo de la casa.** Español en documentos, mensajes y nombres; identificadores y nombres de archivo sin acentos, como el resto de Trucardo. |
+| **RNF-10** | **Comentarios sólo imprescindibles.** El código nuevo se comenta sólo cuando el *por qué* no se puede expresar con el código. La justificación de cada cambio vive en su issue y en su registro de construcción. Los comentarios existentes del Proyecto 1 se dejan como están. Detalle en [PLAN.md](PLAN.md), sección 1.1. |
 
 ## 6. Restricciones
 
