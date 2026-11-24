@@ -104,7 +104,7 @@ Se hace **siempre** en este orden. Los comandos asumen que estás en la raíz de
   docker compose run --build --rm tests
   ```
 
-  Los dos corren lo mismo. Para el primero hacen falta Python 3.10 y las dependencias de `requirements.txt`. El segundo no necesita nada más que Docker. Lleva `--build` porque la imagen copia el código adentro: sin reconstruirla, se probaría el código de la última vez que se construyó.
+  Los dos corren lo mismo. Para el primero hacen falta Python 3.15 y las dependencias de `requirements.txt`. El segundo no necesita nada más que Docker. Lleva `--build` porque la imagen copia el código adentro: sin reconstruirla, se probaría el código de la última vez que se construyó.
 - **Toda issue que cambia código Python** trae tests unitarios **de ese cambio**, escritos **antes** que el código.
 - **Qué es un buen test acá** (`ub-mode`):
   - llama al código como lo haría quien lo usa y verifica lo que esa persona vería;
@@ -689,13 +689,24 @@ Cuando lo que se agrega es una fase entera, sus issues van en su fase y acá que
 - **Criterios de aceptación:** la regla está en el plan, en los requisitos y en la definición de terminado.
 - **Tests:** no aplica (documentación). La suite tiene que pasar.
 
+### #36 Imagen con Python 3.15
+- **Requisitos:** RNF-06, RNF-07
+- **Tipo:** infraestructura
+- **Depende de:** #3
+- **Problema:** la imagen usa Python 3.10, que dejó de recibir parches de seguridad en octubre de 2026. En las computadoras de desarrollo hay Python 3.15, así que correr la suite sin Docker prueba otra versión que la del cluster.
+- **Qué hacer:**
+  - `Dockerfile`: `python:3.10-slim` → `python:3.15-slim`;
+  - actualizar la versión en las Restricciones de `REQUISITOS.md` y en la sección 1.4 del plan.
+- **Criterios de aceptación:** la suite pasa en la imagen nueva, con el *hook* y en la verificación del PR; OpenTelemetry 1.45.2 (fase 4) se instala en la imagen nueva.
+- **Tests:** verificación reproducible (es configuración): la suite completa en la imagen nueva y la instalación de OpenTelemetry.
+
 ---
 
 ## 11. Calendario sugerido
 
 | Día | Issues | Nota |
 | --- | --- | --- |
-| Mar 24/11 | #1, #2, #21, #33, #3, #4, #5 | Planificación, limpieza, replanificación y regla de comentarios (hechas), verificación automática y primer código |
+| Mar 24/11 | #1, #2, #21, #33, #3, #36, #4, #5 | Planificación, limpieza, replanificación, regla de comentarios, verificación automática y Python 3.15 (hechas), y primer código |
 | Mié 25/11 | #6, #7, #8, #9, #10 | Resto del generador, cluster local, máquinas reales y experimentos |
 | Jue 26/11 | #22 a #25, #17 | Persistencia (recomendada) a primera hora; después, prueba limpia y entrega. El informe se escribe en paralelo desde el martes, con los registros como insumo |
 | Después | #11 a #16, #26 a #29, #30 y #31 | Fases extra: si no entran antes de la entrega, quedan como trabajo futuro y se mencionan en el informe |
@@ -734,6 +745,7 @@ Cuando lo que se agrega es una fase entera, sus issues van en su fase y acá que
 | #18 | Test de membresía intermitente | ⏳ |
 | #21 | Replanificación: volúmenes, métricas y logs, y Longhorn | ✅ |
 | #33 | Regla de comentarios en el código | ✅ |
+| #36 | Imagen con Python 3.15 | ✅ |
 
 La tabla sigue el **orden de trabajo**, no el numérico.
 

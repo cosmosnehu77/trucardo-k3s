@@ -110,7 +110,7 @@ Los códigos no se renumeran: los requisitos que se agregan después reciben el 
 - **Plazo:** jueves 26/11/2026.
 - k3s sólo corre en **Linux**: las máquinas reales tienen que ser Linux (las VMs del laboratorio sirven).
 - **Longhorn** necesita `open-iscsi` en cada máquina y puede no funcionar en el cluster local simulado con contenedores. Si no funciona, esa fase se prueba sólo en máquinas reales o VMs.
-- **Versiones fijas:** Python 3.10 (la imagen de Trucardo) y k3s `v1.37.2+k3s1`.
+- **Versiones fijas:** Python 3.15 (la imagen de Trucardo) y k3s `v1.37.2+k3s1`.
 - Dos personas: las issues se resuelven de a una por vez, en orden (ver [PLAN.md](PLAN.md), sección 1.3).
 
 ## 7. Fuera de alcance (YAGNI)
