@@ -488,7 +488,7 @@ Las que aparecen mientras se resuelve otra issue. Por YAGNI no se resuelven en l
 | Issue | Título | Estado |
 | --- | --- | --- |
 | #1 | Planificación y reglas de trabajo | ✅ |
-| #2 | Limpieza del Proyecto 1 | ⏳ |
+| #2 | Limpieza del Proyecto 1 | ✅ |
 | #3 | Verificación automática de la suite | ⏳ |
 | #4 | Arranque sin primario asumido | ⏳ |
 | #5 | Generador de manifiestos | ⏳ |
