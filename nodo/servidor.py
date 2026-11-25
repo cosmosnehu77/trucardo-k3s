@@ -14,7 +14,7 @@ import uuid
 
 import Pyro5.api
 
-from nodo import config, disco, registro
+from nodo import config, disco, registro, telemetria
 from nodo.cluster.protocolo import AL_DIA, ATRASADO, DUPLICADA, ILEGAL
 from nodo.errores import NoPrimario
 from nodo.estado import EstadoServicio
@@ -298,6 +298,7 @@ def main():
         sys.exit(f"configuracion invalida: {error}")
     yo = cluster[id_nodo]
     registro.configurar(servidor)
+    telemetria.configurar(id_nodo)
 
     membresia = Membresia(servidor, cluster)
     servidor._set_membresia(membresia)
@@ -320,6 +321,7 @@ def main():
         log.info("chau.")
     finally:
         membresia.detener()
+        telemetria.cerrar()
 
 
 if __name__ == "__main__":
