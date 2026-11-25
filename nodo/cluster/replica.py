@@ -5,9 +5,7 @@
  pedazo de log que le falta (PUESTA_AL_DIA). Eso va siempre en un hilo aparte:
  replicar() corre con el lock tomado y con un cliente esperando la respuesta."""
 
-import threading
-
-from nodo import transporte
+from nodo import telemetria, transporte
 from nodo.cluster.protocolo import ATRASADO, EPOCA_VIEJA, ILEGAL, PUESTA_AL_DIA, REPLICA
 from nodo.registro import log
 
@@ -68,8 +66,7 @@ class Replicador:
             if id_nodo in self._poniendo_al_dia:
                 return
             self._poniendo_al_dia.add(id_nodo)
-        threading.Thread(target=self._poner_al_dia, args=(id_nodo, su_seq, su_epoca),
-                         daemon=True).start()
+        telemetria.hilo(self._poner_al_dia, id_nodo, su_seq, su_epoca).start()
 
     def _poner_al_dia(self, id_nodo, su_seq, su_epoca):
         #Le manda a N{id_nodo} las ops que le faltan, todas en un mensaje.

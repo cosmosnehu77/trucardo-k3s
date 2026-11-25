@@ -1,10 +1,9 @@
 # El latido y el vigia: los dos hilos periodicos que mantienen viva la vista
 # del cluster.
 
-import threading
 import time
 
-from nodo import transporte
+from nodo import telemetria, transporte
 from nodo.cluster.protocolo import EPOCA_VIEJA, LATIDO
 from nodo.registro import log
 
@@ -19,8 +18,8 @@ class Latido:
         return {LATIDO: self._al_latido}
 
     def arrancar_hilos(self):
-        threading.Thread(target=self._latir, daemon=True).start()
-        threading.Thread(target=self._vigilar, daemon=True).start()
+        telemetria.hilo(self._latir).start()
+        telemetria.hilo(self._vigilar).start()
 
     # ---------- del lado del primario ----------
 
@@ -33,8 +32,7 @@ class Latido:
                 ultimo_seq = nodo.estado.ultimo_seq
             for id_nodo in self.m.cluster:
                 if id_nodo != nodo.id_nodo:
-                    threading.Thread(target=self.latir_a, args=(id_nodo, ultimo_seq),
-                                     daemon=True).start()
+                    telemetria.hilo(self.latir_a, id_nodo, ultimo_seq).start()
 
     def latir_a(self, id_nodo, ultimo_seq):
         nodo = self.m.nodo

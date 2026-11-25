@@ -1,6 +1,8 @@
+import contextvars
 import os
+import threading
 
-from opentelemetry import trace
+from opentelemetry import propagate, trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
@@ -34,3 +36,16 @@ def cerrar():
     if _proveedor is not None:
         proveedor, _proveedor = _proveedor, None
         proveedor.shutdown()
+
+
+def inyectar(mensaje):
+    propagate.inject(mensaje)
+
+
+def extraer(mensaje):
+    return propagate.extract(mensaje)
+
+
+def hilo(funcion, *args):
+    contexto = contextvars.copy_context()
+    return threading.Thread(target=contexto.run, args=(funcion, *args), daemon=True)

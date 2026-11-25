@@ -4,8 +4,8 @@
 
 import json
 import socket
-import threading
 
+from nodo import telemetria
 from nodo.registro import log
 
 # Lo que espera el que atiende a que llegue el mensaje.
@@ -40,7 +40,7 @@ class Escucha:
         self._socket.bind((host, puerto))
         self._socket.listen()
         self.puerto = self._socket.getsockname()[1]     # el real, si se pidio el 0
-        threading.Thread(target=self._aceptar, daemon=True).start()
+        telemetria.hilo(self._aceptar).start()
 
     def cerrar(self):
         """El shutdown despierta al accept() del otro hilo."""
@@ -56,7 +56,7 @@ class Escucha:
                 conexion, _ = self._socket.accept()
             except OSError:
                 return          # cerraron el puerto
-            threading.Thread(target=self._atender, args=(conexion,), daemon=True).start()
+            telemetria.hilo(self._atender, conexion).start()
 
     def _atender(self, conexion):
         with conexion:
