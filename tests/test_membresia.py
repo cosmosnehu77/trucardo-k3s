@@ -26,17 +26,17 @@ def _puerto_libre():
         return s.getsockname()[1]
 
 
-def _membresia(cluster, id_nodo, jitter=JITTER, timeout_eleccion=TIMEOUT_ELECCION):
-    servidor = ServidorTruco(id_nodo=id_nodo, puntos=15)
+def _membresia(cluster, id_nodo, jitter=JITTER, timeout_eleccion=TIMEOUT_ELECCION, disco=None):
+    servidor = ServidorTruco(id_nodo=id_nodo, puntos=15, disco=disco)
     membresia = Membresia(servidor, cluster, latido=LATIDO, timeout=TIMEOUT,
                           jitter=jitter, timeout_eleccion=timeout_eleccion)
     servidor._set_membresia(membresia)
     return membresia
 
 
-def _arrancar(cluster, id_nodo, jitter=JITTER, timeout_eleccion=TIMEOUT_ELECCION):
+def _arrancar(cluster, id_nodo, jitter=JITTER, timeout_eleccion=TIMEOUT_ELECCION, disco=None):
     """Un nodo arrancado. Tambien sirve para revivir uno en el mismo puerto."""
-    membresia = _membresia(cluster, id_nodo, jitter, timeout_eleccion)
+    membresia = _membresia(cluster, id_nodo, jitter, timeout_eleccion, disco=disco)
     membresia.arrancar()
     return membresia
 
@@ -428,22 +428,39 @@ def test_el_zombie_que_replica_se_entera_y_se_baja():
 
 
 def test_dos_candidatos_de_epocas_distintas_no_se_contestan_mando_yo_los_dos():
+    """Con distinta epoca de ultima op, solo gana el de epoca mayor."""
     cluster = {i: Nodo(i, "127.0.0.1", 0, _puerto_libre()) for i in (1, 2)}
     membresias = {i: _membresia(cluster, i) for i in cluster}
     for membresia in membresias.values():
         membresia.eleccion.convocar_aparte = lambda: None
 
-    membresias[1].nodo.epoca = 2
-    membresias[2].nodo.epoca = 1
+    membresias[1].nodo.estado.aplicar({
+        "seq": 1, "epoca": 2, "lamport": 1, "tipo": "crear",
+        "id_sesion": "s1", "id_operacion": "s1",
+        "datos": {"nombre": "ana", "id_mesa": "m1", "semilla": 1, "puntos": 15},
+    })
+    membresias[2].nodo.estado.aplicar({
+        "seq": 1, "epoca": 1, "lamport": 1, "tipo": "crear",
+        "id_sesion": "s2", "id_operacion": "s2",
+        "datos": {"nombre": "beto", "id_mesa": "m2", "semilla": 2, "puntos": 15},
+    })
 
-    pedido_1 = membresias[1].mensaje(ELECCION, ultimo_seq=membresias[1].nodo.estado.ultimo_seq)
-    pedido_2 = membresias[2].mensaje(ELECCION, ultimo_seq=membresias[2].nodo.estado.ultimo_seq)
+    pedido_1 = membresias[1].mensaje(
+        ELECCION,
+        ultimo_seq=membresias[1].nodo.estado.ultimo_seq,
+        epoca_ultima=membresias[1].nodo.estado.epoca_ultima,
+    )
+    pedido_2 = membresias[2].mensaje(
+        ELECCION,
+        ultimo_seq=membresias[2].nodo.estado.ultimo_seq,
+        epoca_ultima=membresias[2].nodo.estado.epoca_ultima,
+    )
 
     respuesta_de_2 = membresias[2].eleccion._al_eleccion(pedido_1)
     respuesta_de_1 = membresias[1].eleccion._al_eleccion(pedido_2)
 
-    assert respuesta_de_1["mando_yo"] is True, "el de epoca mayor le tiene que ganar"
-    assert respuesta_de_2["mando_yo"] is False, "el de epoca menor no le puede contestar mando_yo"
+    assert respuesta_de_1["mando_yo"] is True, "el de epoca_ultima mayor le tiene que ganar"
+    assert respuesta_de_2["mando_yo"] is False, "el de epoca_ultima menor no le puede contestar mando_yo"
 
 
 def test_dos_nodos_en_epocas_distintas_eligen_un_solo_primario():

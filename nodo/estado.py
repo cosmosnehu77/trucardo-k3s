@@ -57,6 +57,10 @@ class EstadoServicio:
         self.log = []           # log[i] es la op con seq i + 1
         self.ultimo_seq = 0
 
+    @property
+    def epoca_ultima(self):
+        return self.log[-1]["epoca"] if self.log else 0
+
     def aplicar(self, op):
         #Aplica la op y la agrega al log.
         if op["seq"] != self.ultimo_seq + 1:

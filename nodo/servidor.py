@@ -50,7 +50,7 @@ class ServidorTruco:
 
         self.estado = EstadoServicio()      # lo que se replica
         if disco is not None:
-            self.estado = self._estado_guardado()
+            self.estado = self._reconstruir(self.disco.operaciones())
             self._epoca = disco.epoca()
 
     @property
@@ -63,11 +63,19 @@ class ServidorTruco:
             self.disco.guardar_epoca(valor)
         self._epoca = valor
 
-    def _estado_guardado(self):
+    def _reconstruir(self, ops):
         estado = EstadoServicio()
-        for op in self.disco.operaciones():
+        for op in ops:
             estado.aplicar(op)
         return estado
+
+    def _recortar(self, cantidad):
+        log.warning(f"recorto el log de la op {self.estado.ultimo_seq} a la {cantidad}: "
+                    f"diverge del primario")
+        conservadas = self.estado.log[:cantidad]
+        if self.disco is not None:
+            self.disco.reescribir(conservadas)
+        self.estado = self._reconstruir(conservadas)
 
     def _aplicar(self, op):
         self.estado.aplicar(op)
@@ -76,7 +84,7 @@ class ServidorTruco:
                 self.disco.agregar(op)
             except OSError as error:
                 log.error(f"no pude guardar la op {op['seq']} en disco: {error}")
-                self.estado = self._estado_guardado()
+                self.estado = self._reconstruir(self.disco.operaciones())
                 raise
 
     def _set_membresia(self, membresia):
@@ -211,35 +219,48 @@ class ServidorTruco:
 
     # ---------- el otro lado: lo que me replica el primario ----------
 
-    def _atiendo_replica(self, op):
+    def _atiendo_replica(self, op, previa=None):
         with self.lock:
-            motivo = self._aplicar_replica(op)
+            motivo = self._aplicar_replica(op, previa)
             if motivo is None:
                 sesion = self.estado.sesion(op["id_sesion"])
                 log.info(f"op {op['seq']} · {op['tipo']} · {sesion.nombre} · "
                          f"mesa {sesion.id_mesa}")
             return motivo
 
-    def _atiendo_puesta_al_dia(self, ops):
+    def _atiendo_puesta_al_dia(self, ops, desde, epoca):
         """Aplica en orden las ops que me faltaban. Devuelve None si con eso
         quedo al dia, o el motivo por el que se corto."""
         with self.lock:
-            desde = self.estado.ultimo_seq
+            if desde > self.estado.ultimo_seq:
+                return ATRASADO
+            inicio = self.estado.ultimo_seq
             for op in ops:
+                seq = op.get("seq", 0) if isinstance(op, dict) else 0
+                # Como en Raft, solo se recorta ante una op distinta: la puesta
+                # al dia pudo calcularse antes de una REPLICA que ya confirme.
+                if 0 < seq <= self.estado.ultimo_seq and self.estado.log[seq - 1] != op:
+                    self._recortar(seq - 1)
                 motivo = self._aplicar_replica(op)
                 if motivo not in AL_DIA:
                     log.warning(f"la puesta al dia se corto en la op "
                                 f"{op.get('seq') if isinstance(op, dict) else op!r}: {motivo}")
                     return motivo
-            log.info(f"puesta al dia: de la op {desde} a la {self.estado.ultimo_seq}")
+            # Lo que sigue a lo recibido solo puede ser del primario actual.
+            fin = desde + len(ops)
+            if self.estado.ultimo_seq > fin and self.estado.log[fin]["epoca"] != epoca:
+                self._recortar(fin)
+            log.info(f"puesta al dia: de la op {inicio} a la {self.estado.ultimo_seq}")
             return None
 
-    def _aplicar_replica(self, op):
-        if not isinstance(op, dict) or "seq" not in op:
+    def _aplicar_replica(self, op, previa=None):
+        if not isinstance(op, dict) or "seq" not in op or op["seq"] < 1:
             return ILEGAL
         if op["seq"] <= self.estado.ultimo_seq:
-            return DUPLICADA
+            return DUPLICADA if self.estado.log[op["seq"] - 1] == op else ATRASADO
         if op["seq"] > self.estado.ultimo_seq + 1:
+            return ATRASADO
+        if previa is not None and previa != self.estado.epoca_ultima:
             return ATRASADO
 
         try:

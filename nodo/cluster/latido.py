@@ -59,18 +59,19 @@ class Latido:
             return
 
         su_seq = respuesta.get("ultimo_seq", 0)
+        su_epoca = respuesta.get("epoca_ultima", 0)
         with nodo.lock:
             if id_nodo not in self.m.vivos:
                 log.info(f"N{id_nodo} entra a la vista (ultimo_seq {su_seq})")
             self.m.vivos[id_nodo] = su_seq
-            atrasado = su_seq < nodo.estado.ultimo_seq
+            difiere = (su_epoca, su_seq) != (nodo.estado.epoca_ultima, nodo.estado.ultimo_seq)
 
         # Aca es donde se atrapa al que estuvo caido y volvio: por la replica
         # no se lo ve nunca, porque un nodo muerto no contesta nada. Y este
         # hilo ya es uno por nodo y sin nadie esperando, asi que la puesta al
         # dia no le cuesta el tiempo a ningun cliente.
-        if atrasado:
-            self.m.replica.poner_al_dia_aparte(id_nodo, su_seq)
+        if difiere:
+            self.m.replica.poner_al_dia_aparte(id_nodo, su_seq, su_epoca)
 
     # ---------- del lado del backup ----------
 

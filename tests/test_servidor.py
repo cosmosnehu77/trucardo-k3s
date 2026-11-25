@@ -541,7 +541,7 @@ def test_un_backup_contesta_el_historial_aunque_no_atienda_el_juego():
          "datos": {"nombre": "ana", "id_mesa": "abc123", "semilla": 7, "puntos": 15}},
         {"seq": 2, "epoca": 0, "lamport": 6, "tipo": "unirse", "id_sesion": "s2",
          "id_operacion": "s2", "datos": {"nombre": "beto", "id_mesa": "abc123"}},
-    ])
+    ], 0, 0)
 
     try:
         with Pyro5.api.Proxy(uri) as proxy:
