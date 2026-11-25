@@ -3,7 +3,9 @@
 import threading
 import time
 
-from nodo import config, transporte
+from opentelemetry import context
+
+from nodo import config, telemetria, transporte
 from nodo.cluster.eleccion import Eleccion
 from nodo.cluster.latido import Latido
 from nodo.cluster.protocolo import AL_DIA, QUIEN, TIPO_DESCONOCIDO
@@ -57,19 +59,25 @@ class Membresia:
 
     def mensaje(self, tipo, **extra):
         with self.nodo.lock:
-            return {"tipo": tipo, "origen": self.nodo.id_nodo, "epoca": self.nodo.epoca,
-                    "lamport": self.nodo.reloj.tic(), **extra}
+            datos = {"tipo": tipo, "origen": self.nodo.id_nodo, "epoca": self.nodo.epoca,
+                     "lamport": self.nodo.reloj.tic(), **extra}
+        telemetria.inyectar(datos)
+        return datos
 
     def despachar(self, mensaje):
         """Atiende un mensaje que llega y devuelve la respuesta, tambien estampada."""
-        self.nodo.reloj.recibir(mensaje.get("lamport", 0))
-        manejador = self._manejadores.get(mensaje.get("tipo"))
-        if manejador is None:
-            respuesta = {"ok": False, "motivo": TIPO_DESCONOCIDO}
-        else:
-            respuesta = manejador(mensaje)
-        respuesta["lamport"] = self.nodo.reloj.tic()
-        return respuesta
+        token = context.attach(telemetria.extraer(mensaje))
+        try:
+            self.nodo.reloj.recibir(mensaje.get("lamport", 0))
+            manejador = self._manejadores.get(mensaje.get("tipo"))
+            if manejador is None:
+                respuesta = {"ok": False, "motivo": TIPO_DESCONOCIDO}
+            else:
+                respuesta = manejador(mensaje)
+            respuesta["lamport"] = self.nodo.reloj.tic()
+            return respuesta
+        finally:
+            context.detach(token)
 
     def respuesta(self, motivo=None, **extra):
         #La forma que tienen todas las respuestas del cluster
@@ -96,7 +104,7 @@ class Membresia:
             with candado:
                 respuestas[id_nodo] = respuesta
 
-        hilos = [threading.Thread(target=preguntar_a, args=(id_nodo,), daemon=True)
+        hilos = [telemetria.hilo(preguntar_a, id_nodo)
                  for id_nodo in self.cluster if id_nodo != self.nodo.id_nodo]
         for hilo in hilos:
             hilo.start()

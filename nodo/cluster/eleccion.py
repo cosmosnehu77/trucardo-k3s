@@ -1,9 +1,9 @@
 # La eleccion Bully: quien manda cuando el primario deja de latir.
 
 import random
-import threading
 import time
 
+from nodo import telemetria
 from nodo.cluster.protocolo import COORDINADOR, ELECCION, EPOCA_VIEJA
 from nodo.registro import log
 
@@ -31,7 +31,7 @@ class Eleccion:
                 return
             self._convocando = True
             self.m.eleccion_desde = time.monotonic()
-        threading.Thread(target=self.convocar, daemon=True).start()
+        telemetria.hilo(self.convocar).start()
 
     def convocar(self):
         nodo = self.m.nodo

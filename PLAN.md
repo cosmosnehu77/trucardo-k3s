@@ -824,7 +824,7 @@ Cuando lo que se agrega es una fase entera, sus issues van en su fase y acá que
 | #52 | Los nodos se encuentran sin depender del DNS del cluster | ✅ |
 | #53 | Una elección tardía dispara otra aunque ya haya primario | ✅ |
 | #11 | SDK de OpenTelemetry (extra) | ✅ |
-| #12 | Contexto entre nodos e hilos (extra) | ⏳ |
+| #12 | Contexto entre nodos e hilos (extra) | ✅ |
 | #13 | Contexto cliente → nodo (extra) | ⏳ |
 | #14 | *Spans* de dominio (extra) | ⏳ |
 | #15 | Jaeger en compose y k3s (extra) | ⏳ |
