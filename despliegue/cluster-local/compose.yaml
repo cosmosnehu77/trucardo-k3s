@@ -1,0 +1,65 @@
+# Levantar:   docker compose -f despliegue/cluster-local/compose.yaml up -d
+# Kubeconfig: export KUBECONFIG="$PWD/despliegue/cluster-local/salida/kubeconfig.yaml"
+# Imagen:     despliegue/cluster-local/cargar-imagen.sh
+# Bajar:      docker compose -f despliegue/cluster-local/compose.yaml down
+name: trucardo-k3s
+
+x-k3s: &k3s
+  image: rancher/k3s:v1.37.2-k3s1
+  privileged: true
+  tmpfs: [/run, /var/run]
+  environment: &k3s-env
+    K3S_TOKEN: trucardo-local
+  restart: "no"     # si se apaga una máquina queda apagada hasta docker compose start
+
+x-agente: &agente
+  <<: *k3s
+  environment:
+    <<: *k3s-env
+    K3S_URL: https://172.30.0.11:6443
+
+services:
+  maquina1:
+    <<: *k3s
+    command:
+      - server
+      - --node-name
+      - maquina1
+      - --disable
+      - traefik
+      - --disable
+      - metrics-server
+      - --tls-san
+      - 127.0.0.1
+    ports: ["6443:6443"]
+    environment:
+      <<: *k3s-env
+      K3S_KUBECONFIG_OUTPUT: /salida/kubeconfig.yaml
+      K3S_KUBECONFIG_MODE: "644"
+    volumes:
+      - ./salida:/salida
+    networks:
+      maquinas:
+        ipv4_address: 172.30.0.11
+
+  maquina2:
+    <<: *agente
+    command: ["agent", "--node-name", "maquina2"]
+    networks:
+      maquinas:
+        ipv4_address: 172.30.0.12
+
+  maquina3:
+    <<: *agente
+    command: ["agent", "--node-name", "maquina3"]
+    networks:
+      maquinas:
+        ipv4_address: 172.30.0.13
+
+# IPs fijas (D11): un agente reiniciado conserva su IP y vuelve al cluster
+networks:
+  maquinas:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
