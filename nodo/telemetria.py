@@ -1,3 +1,4 @@
+import contextlib
 import contextvars
 import os
 import threading
@@ -67,3 +68,15 @@ def de_anotaciones(anotaciones):
 def hilo(funcion, *args):
     contexto = contextvars.copy_context()
     return threading.Thread(target=contexto.run, args=(funcion, *args), daemon=True)
+
+
+@contextlib.contextmanager
+def span(nombre, nodo, **atributos):
+    with tracer().start_as_current_span(nombre) as actual:
+        actual.set_attribute("trucardo.nodo", nodo.id_nodo)
+        actual.set_attribute("trucardo.rol", nodo.rol)
+        actual.set_attribute("trucardo.epoca", nodo.epoca)
+        for clave, valor in atributos.items():
+            if valor is not None:
+                actual.set_attribute(f"trucardo.{clave}", valor)
+        yield actual

@@ -42,18 +42,23 @@ class Eleccion:
                     return
                 epoca_ultima = nodo.estado.epoca_ultima
                 ultimo_seq = nodo.estado.ultimo_seq
+
+            with telemetria.span("eleccion", nodo, ultimo_seq=ultimo_seq,
+                                 epoca_ultima=epoca_ultima) as actual:
                 pedido = self.m.mensaje(ELECCION, ultimo_seq=ultimo_seq,
                                         epoca_ultima=epoca_ultima)
-            log.info(f"arranco una eleccion (epoca_ultima {epoca_ultima}, ultimo_seq {ultimo_seq})")
+                log.info(f"arranco una eleccion (epoca_ultima {epoca_ultima}, ultimo_seq {ultimo_seq})")
 
-            respuestas = self.m.preguntar_a_todos(pedido)
-            if any(r.get("mando_yo") for r in respuestas.values()):
-                log.info("me gana otro candidato: espero su COORDINADOR")
-                return
+                respuestas = self.m.preguntar_a_todos(pedido)
+                if any(r.get("mando_yo") for r in respuestas.values()):
+                    actual.set_attribute("trucardo.resultado", "perdio")
+                    log.info("me gana otro candidato: espero su COORDINADOR")
+                    return
 
-            log.info(f"nadie me gana (contestaron {len(respuestas)} de "
-                     f"{len(self.m.cluster) - 1}): me corono")
-            self._coronarme(respuestas)
+                log.info(f"nadie me gana (contestaron {len(respuestas)} de "
+                         f"{len(self.m.cluster) - 1}): me corono")
+                self._coronarme(respuestas)
+                actual.set_attribute("trucardo.resultado", "gano")
         finally:
             with nodo.lock:
                 self._convocando = False
@@ -66,10 +71,12 @@ class Eleccion:
             vistas = [nodo.epoca] + [r.get("epoca", 0) for r in respuestas.values()]
             self.m.coronarme(max(vistas) + 1,
                              {i: r.get("ultimo_seq", 0) for i, r in respuestas.items()})
-            aviso = self.m.mensaje(COORDINADOR)
             epoca = nodo.epoca
-        log.info(f"gano la eleccion: soy el primario de la epoca {epoca}")
-        self.m.preguntar_a_todos(aviso)
+
+        with telemetria.span("coordinador", nodo):
+            aviso = self.m.mensaje(COORDINADOR)
+            log.info(f"gano la eleccion: soy el primario de la epoca {epoca}")
+            self.m.preguntar_a_todos(aviso)
 
     def _credenciales(self):
         return (self.m.nodo.estado.epoca_ultima,
@@ -83,23 +90,30 @@ class Eleccion:
                  mensaje.get("ultimo_seq", 0),
                  mensaje["origen"])
 
-        with self.m.nodo.lock:
-            mias = self._credenciales()
-            le_gano = mias > suyas
-            if not le_gano:
-                self.m.eleccion_desde = time.monotonic()
-            convocar = le_gano and not self.m.primario_vivo()
-            respuesta = self.m.respuesta(mando_yo=le_gano)
-
-        if convocar:
-            self.convocar_aparte()
+        with telemetria.span("desafio", self.m.nodo, candidato=mensaje["origen"]) as actual:
+            with self.m.nodo.lock:
+                mias = self._credenciales()
+                le_gano = mias > suyas
+                if not le_gano:
+                    self.m.eleccion_desde = time.monotonic()
+                convocar = le_gano and not self.m.primario_vivo()
+                respuesta = self.m.respuesta(mando_yo=le_gano)
+            actual.set_attribute("trucardo.le_gano", le_gano)
+            if convocar:
+                self.convocar_aparte()
         return respuesta
 
     def al_coordinador(self, mensaje):
         origen, epoca = mensaje["origen"], mensaje.get("epoca", 0)
 
         with self.m.nodo.lock:
-            if self.m.lo_rechazo(origen, epoca):
-                return self.m.respuesta(EPOCA_VIEJA)
-            self.m.adoptar_primario(origen, epoca)
-            return self.m.respuesta()
+            with telemetria.span("coordinador recibido", self.m.nodo,
+                                 primario=origen) as actual:
+                aceptado = not self.m.lo_rechazo(origen, epoca)
+                actual.set_attribute("trucardo.aceptado", aceptado)
+                if not aceptado:
+                    return self.m.respuesta(EPOCA_VIEJA)
+                self.m.adoptar_primario(origen, epoca)
+                actual.set_attribute("trucardo.epoca", self.m.nodo.epoca)
+                actual.set_attribute("trucardo.rol", self.m.nodo.rol)
+                return self.m.respuesta()
