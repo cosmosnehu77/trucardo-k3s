@@ -25,6 +25,7 @@ class Membresia:
 
         self.vivos = {}                          # del primario: id -> ultimo_seq
         self.visto = {}                          # ultimo_seq conocido de cada nodo; no se borra al caer
+        self._version_seq = {}
         self.ultimo_latido = time.monotonic()    # monotonic: la hora de pared puede saltar
         self.eleccion_desde = None               # desde cuando hay una eleccion en curso
 
@@ -116,17 +117,22 @@ class Membresia:
         with candado:
             return dict(respuestas)
 
+    def version_seq(self, id_nodo):
+        return self._version_seq.get(id_nodo, 0)
+
     def anotar_seq(self, id_nodo, seq):
         self.vivos[id_nodo] = seq
         self.visto[id_nodo] = seq
+        self._version_seq[id_nodo] = self._version_seq.get(id_nodo, 0) + 1
 
     def coronarme(self, epoca, vivos):
         self.nodo.epoca = epoca
         self.nodo.rol = "primario"
         self.nodo.primario = self.nodo.id_nodo
         self.eleccion_desde = None
-        self.vivos = dict(vivos)
-        self.visto.update(vivos)
+        self.vivos = {}
+        for id_nodo, seq in vivos.items():
+            self.anotar_seq(id_nodo, seq)
 
     def sin_primario(self):
         self.nodo.primario = None

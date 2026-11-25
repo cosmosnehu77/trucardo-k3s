@@ -58,9 +58,10 @@ def _observar_atraso(_opciones):
             id_nodo = membresia.nodo.id_nodo
             ultimo_seq = membresia.nodo.estado.ultimo_seq
             visto = dict(membresia.visto)
-            otros = [otro for otro in membresia.cluster if otro != id_nodo]
-        for otro in otros:
-            atraso = max(0, ultimo_seq - visto.get(otro, 0))
+        for otro, seq in visto.items():
+            if otro == id_nodo:
+                continue
+            atraso = max(0, ultimo_seq - seq)
             observaciones.append(
                 Observation(atraso, {"trucardo.nodo": id_nodo, "backup": otro})
             )

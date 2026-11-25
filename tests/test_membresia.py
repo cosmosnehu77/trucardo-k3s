@@ -6,6 +6,7 @@ import socket
 import time
 
 from nodo.cluster import eleccion as eleccion_mod
+from nodo.cluster import latido as latido_mod
 from nodo import transporte
 from nodo.config import Nodo
 from nodo.errores import NoPrimario
@@ -393,6 +394,35 @@ def test_el_latido_rechazado_igual_entra_al_reloj():
              f"el lamport de la respuesta rechazada")
     finally:
         _apagar(membresias)
+
+
+def test_el_latido_viejo_no_pisa_un_ack_mas_nuevo():
+    cluster = {i: Nodo(i, "127.0.0.1", 0, _puerto_libre()) for i in (1, 2)}
+    primario = _membresia(cluster, 1)
+    primario.coronarme(epoca=1, vivos={2: 9})
+    primario.detener()
+    primario.replica.poner_al_dia_aparte = lambda *_: None
+
+    enviar_real = latido_mod.transporte.enviar
+
+    def enviar_con_ack_en_vuelo(_destino, _mensaje, **_kwargs):
+        primario.anotar_seq(2, 10)
+        return {"ok": True, "ultimo_seq": 9, "epoca_ultima": 1, "lamport": 1}
+
+    latido_mod.transporte.enviar = enviar_con_ack_en_vuelo
+    try:
+        primario.latido.latir_a(2, 9)
+        assert primario.visto[2] == 10
+        assert primario.vivos[2] == 10
+
+        latido_mod.transporte.enviar = lambda *_a, **_kw: {
+            "ok": True, "ultimo_seq": 5, "epoca_ultima": 1, "lamport": 2,
+        }
+        primario.latido.latir_a(2, 10)
+        assert primario.visto[2] == 5
+        assert primario.vivos[2] == 5
+    finally:
+        latido_mod.transporte.enviar = enviar_real
 
 
 # ---------- la replica ----------
