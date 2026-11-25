@@ -12,7 +12,7 @@ Además:
 - **Fases extra:** observabilidad con **OpenTelemetry** (trazas en Jaeger, métricas y logs en Grafana) y almacenamiento replicado con **Longhorn**, para que el nodo se mude de máquina con su disco.
 
 > [!NOTE]
-> **Estado:** en construcción. Hoy el repositorio ya tiene el generador de manifiestos y el cluster local de desarrollo sobre la base del Proyecto 1 (tag `proyecto1-base`). El despliegue en k3s se construye issue por issue; ver la tabla de estado al final de [PLAN.md](PLAN.md).
+> **Estado:** en construcción. Hoy el repositorio ya tiene el generador de manifiestos, el cluster local de desarrollo y la guía para tres máquinas reales sobre la base del Proyecto 1 (tag `proyecto1-base`). El despliegue en k3s se construye issue por issue; ver la tabla de estado al final de [PLAN.md](PLAN.md).
 
 ## Documentos
 
@@ -131,6 +131,159 @@ Apagá el cluster con:
 ```bash
 docker compose -f despliegue/cluster-local/compose.yaml down
 ```
+
+## Despliegue en tres máquinas reales
+
+Hacen falta tres computadoras Linux con `systemd` en la misma red, cada una con IP fija o reservada, un nombre de host distinto (`hostname`), `sudo` y `curl`. Además, una «compu de armado» con Docker, `python3` y este repo (puede ser una de las tres).
+
+En los ejemplos: `maquina1` con `192.168.0.11` (servidor k3s), `maquina2` con `192.168.0.12` y `maquina3` con `192.168.0.13` (agentes). Reemplazá las IPs por las de ustedes.
+
+### 1. En la compu de armado
+
+Construí la imagen y guardala en un archivo `.tar` para cargarla sin registro de imágenes:
+
+```bash
+docker compose build nodo1
+```
+
+```bash
+docker save trucardo:local -o trucardo.tar
+```
+
+Generá los manifiestos desde la raíz del repo:
+
+```bash
+TRUCARDO_NODOS="1@nodo1:9501:9601,2@nodo2:9502:9602,3@nodo3:9503:9603" python3 -m despliegue.manifiestos --imagen trucardo:local > trucardo.json
+```
+
+Consultá la versión de k3s fijada en el cluster local y anotala (va donde dice `<version>` más abajo):
+
+```bash
+sed -n 's|.*rancher/k3s:\(v.*\)-\(k3s.*\)|\1+\2|p' despliegue/cluster-local/compose.yaml
+```
+
+Copiá `trucardo.tar` a las tres máquinas y `trucardo.json` a `maquina1` (con `scp` o en un pendrive):
+
+```bash
+scp trucardo.tar trucardo.json usuario@192.168.0.11:
+```
+
+```bash
+scp trucardo.tar usuario@192.168.0.12:
+```
+
+```bash
+scp trucardo.tar usuario@192.168.0.13:
+```
+
+### 2. En las tres máquinas: firewall
+
+Si `sudo ufw status` dice `inactive`, salteá este paso. Si está activo, las tres primeras reglas son las que pide k3s y las otras dejan pasar a los clientes y el tráfico interno del cluster:
+
+```bash
+sudo ufw allow 6443/tcp            # API de Kubernetes (los agentes se unen al servidor)
+sudo ufw allow 8472/udp            # red entre Pods (VXLAN de Flannel)
+sudo ufw allow 10250/tcp           # kubelet (logs y exec de los Pods)
+sudo ufw allow 30000:32767/tcp     # NodePort: los clientes entran por acá
+sudo ufw allow from 10.42.0.0/16   # Pods
+sudo ufw allow from 10.43.0.0/16   # Services
+```
+
+### 3. En maquina1: servidor
+
+Instalá el servidor k3s con la `<version>` del paso 1:
+
+```bash
+curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=<version> sh -s - server --disable traefik --disable metrics-server
+```
+
+Copiá el token del servidor:
+
+```bash
+sudo cat /var/lib/rancher/k3s/server/node-token
+```
+
+### 4. En maquina2 y maquina3: agentes
+
+Uní cada agente al servidor reemplazando `<version>` y `<token>`:
+
+```bash
+curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=<version> K3S_URL=https://192.168.0.11:6443 K3S_TOKEN=<token> sh -s - agent
+```
+
+### 5. En maquina1: verificar
+
+Esperá a que las tres máquinas aparezcan `Ready`:
+
+```bash
+sudo k3s kubectl get nodes -o wide
+```
+
+### 6. En las tres: cargar la imagen
+
+En `maquina1`, `maquina2` y `maquina3`, importá la imagen en el containerd de k3s:
+
+```bash
+sudo k3s ctr images import trucardo.tar
+```
+
+### 7. En maquina1: aplicar y ver los Pods
+
+Aplicá los manifiestos y verificá que corra un Pod por máquina:
+
+```bash
+sudo k3s kubectl apply -f trucardo.json
+```
+
+```bash
+sudo k3s kubectl get pods -o wide
+```
+
+### 8. Jugar
+
+Desde la compu de armado (o cualquier compu de la red con Docker y la imagen `trucardo:local`), obtené el valor de `TRUCARDO_NODOS` para clientes externos (`NodePort`, puerto + 21000):
+
+```bash
+TRUCARDO_NODOS="1@nodo1:9501:9601,2@nodo2:9502:9602,3@nodo3:9503:9603" python3 -m despliegue.manifiestos --clientes 192.168.0.11
+```
+
+Reemplazá `<valor>` por esa salida y corré un jugador en cada una de dos terminales o computadoras:
+
+```bash
+docker run --rm -it --network host -e TRUCARDO_NODOS="<valor>" trucardo:local python -m cliente.cliente leo
+```
+
+```bash
+docker run --rm -it --network host -e TRUCARDO_NODOS="<valor>" trucardo:local python -m cliente.cliente beto
+```
+
+Para ver quién es el primario:
+
+```bash
+docker run --rm -it --network host -e TRUCARDO_NODOS="<valor>" trucardo:local python -m cliente.quien_es
+```
+
+### 9. Desinstalar
+
+En `maquina1`:
+
+```bash
+sudo /usr/local/bin/k3s-uninstall.sh
+```
+
+En `maquina2` y `maquina3`:
+
+```bash
+sudo /usr/local/bin/k3s-agent-uninstall.sh
+```
+
+### Si algo falla
+
+- **Logs:** `sudo journalctl -u k3s` (servidor) y `sudo journalctl -u k3s-agent` (agentes).
+- **Un agente no aparece en `get nodes`:** desde ese agente, `curl -k https://192.168.0.11:6443` tiene que contestar (un `401` en JSON está bien); si no, revisá el firewall y la IP.
+- **Máquinas clonadas con el mismo `hostname`:** k3s no deja entrar a la segunda; cambiá el `hostname` o sumá `--node-name <nombre>` al comando de instalación.
+- **Máquinas con varias interfaces de red:** sumá `--node-ip <ip de esa máquina>` al comando de instalación.
+- **Pods en `ErrImagePull` o `ImagePullBackOff`:** falta el paso 6 en esa máquina.
 
 ## Cómo se trabaja
 
