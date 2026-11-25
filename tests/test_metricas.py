@@ -205,3 +205,23 @@ def test_tras_una_jugada_replicada_el_atraso_es_cero_sin_esperar_latido():
     finally:
         telemetria.cerrar()
         _apagar(membresias)
+
+
+def test_primario_recien_coronado_no_informa_atraso_de_backup_desconocido():
+    lector = InMemoryMetricReader()
+    cluster = {i: Nodo(i, "127.0.0.1", 0, _puerto_libre()) for i in (1, 2, 3)}
+    primario = _membresia(cluster, 2)
+    telemetria.configurar("prueba", lector=lector)
+    try:
+        telemetria.observar(primario)
+        primario.coronarme(epoca=1, vivos={1: 0})
+        primario.nodo.estado.aplicar({
+            "seq": 1, "epoca": 1, "lamport": 1, "tipo": "crear",
+            "id_sesion": "s1", "id_operacion": "s1",
+            "datos": {"nombre": "ana", "id_mesa": "m1", "semilla": 1, "puntos": 15},
+        })
+
+        assert _valor(lector, "trucardo.backup.atraso", {"trucardo.nodo": 2, "backup": 3}) is None
+        assert _valor(lector, "trucardo.backup.atraso", {"trucardo.nodo": 2, "backup": 1}) == 1
+    finally:
+        telemetria.cerrar()
