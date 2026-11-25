@@ -134,6 +134,50 @@ def test_la_anti_afinidad_es_preferida():
         assert termino["topologyKey"] == "kubernetes.io/hostname"
 
 
+def test_cada_nodo_tiene_su_volumen_hostpath():
+    deployments = _por_tipo(manifiestos(CLUSTER_TRES, IMAGEN), "Deployment")
+
+    assert len(deployments) == 3
+    rutas = []
+    for i, d in enumerate(deployments, start=1):
+        volumenes = d["spec"]["template"]["spec"]["volumes"]
+        assert len(volumenes) == 1
+        assert volumenes[0]["hostPath"] == {
+            "path": f"/var/lib/trucardo/nodo{i}",
+            "type": "DirectoryOrCreate",
+        }
+        rutas.append(volumenes[0]["hostPath"]["path"])
+    assert len(set(rutas)) == 3
+
+
+def test_el_punto_de_montaje_y_trucardo_datos_coinciden():
+    deployments = _por_tipo(manifiestos(CLUSTER_TRES, IMAGEN), "Deployment")
+
+    assert len(deployments) == 3
+    for d in deployments:
+        pod = d["spec"]["template"]["spec"]
+        volumenes = {v["name"] for v in pod["volumes"]}
+        contenedor = pod["containers"][0]
+        montajes = contenedor["volumeMounts"]
+        assert len(montajes) == 1
+        montaje = montajes[0]
+        assert montaje["name"] in volumenes
+
+        entorno = {e["name"]: e["value"] for e in contenedor["env"]}
+        assert "TRUCARDO_DATOS" in entorno
+        assert montaje["mountPath"] == entorno["TRUCARDO_DATOS"]
+        assert montaje["mountPath"].startswith("/")
+
+
+def test_no_hay_ningun_pvc():
+    objetos = manifiestos(CLUSTER_TRES, IMAGEN)
+
+    assert _por_tipo(objetos, "PersistentVolumeClaim") == []
+    for d in _por_tipo(objetos, "Deployment"):
+        for volumen in d["spec"]["template"]["spec"]["volumes"]:
+            assert "persistentVolumeClaim" not in volumen
+
+
 def test_service_usa_host_y_selector():
     services = _por_tipo(manifiestos(CLUSTER_TRES, IMAGEN), "Service")
 

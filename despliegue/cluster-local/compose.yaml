@@ -38,6 +38,9 @@ services:
       K3S_KUBECONFIG_MODE: "644"
     volumes:
       - ./salida:/salida
+      - type: volume
+        source: datos-maquina1
+        target: &datos-maquina /var/lib/trucardo
     networks:
       maquinas:
         ipv4_address: 172.30.0.11
@@ -45,6 +48,10 @@ services:
   maquina2:
     <<: *agente
     command: ["agent", "--node-name", "maquina2"]
+    volumes:
+      - type: volume
+        source: datos-maquina2
+        target: *datos-maquina
     networks:
       maquinas:
         ipv4_address: 172.30.0.12
@@ -52,6 +59,10 @@ services:
   maquina3:
     <<: *agente
     command: ["agent", "--node-name", "maquina3"]
+    volumes:
+      - type: volume
+        source: datos-maquina3
+        target: *datos-maquina
     networks:
       maquinas:
         ipv4_address: 172.30.0.13
@@ -63,3 +74,8 @@ networks:
     ipam:
       config:
         - subnet: 172.30.0.0/24
+
+volumes:
+  datos-maquina1: {}
+  datos-maquina2: {}
+  datos-maquina3: {}

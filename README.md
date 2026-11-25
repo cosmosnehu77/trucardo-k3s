@@ -32,6 +32,12 @@ Levantar los tres nodos (los logs salen mezclados, con el nombre de cada nodo ad
 docker compose up --build
 ```
 
+Cada nodo guarda su log en un volumen (`datos1` a `datos3`), así que las partidas sobreviven a `docker compose down`. Para arrancar de cero, borrá también los volúmenes:
+
+```bash
+docker compose down -v
+```
+
 Un jugador en cada una de otras dos terminales:
 
 ```bash
@@ -131,6 +137,8 @@ Apagá el cluster con:
 ```bash
 docker compose -f despliegue/cluster-local/compose.yaml down
 ```
+
+Cada máquina guarda los logs de sus nodos en un volumen montado en `/var/lib/trucardo`, así que sobreviven a `down`. Para borrarlos, sumá `-v`.
 
 ## Despliegue en tres máquinas reales
 
@@ -275,6 +283,12 @@ En `maquina2` y `maquina3`:
 
 ```bash
 sudo /usr/local/bin/k3s-agent-uninstall.sh
+```
+
+Los logs de los nodos quedan en `/var/lib/trucardo` de cada máquina. Para borrarlos:
+
+```bash
+sudo rm -rf /var/lib/trucardo
 ```
 
 ### Si algo falla
