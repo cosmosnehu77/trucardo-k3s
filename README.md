@@ -11,8 +11,49 @@ Además:
 - **Fase recomendada:** cada nodo guarda su log en un **volumen**, así un apagón de las tres máquinas no pierde las partidas.
 - **Fases extra:** observabilidad con **OpenTelemetry** (trazas en Jaeger, métricas y logs en Grafana) y almacenamiento replicado con **Longhorn**, para que el nodo se mude de máquina con su disco.
 
-> [!NOTE]
-> **Estado:** en construcción. Hoy el repositorio ya tiene el generador de manifiestos, el cluster local de desarrollo, la guía para tres máquinas reales, el log de cada nodo en disco y los [experimentos de falla](experimentos/README.md), sobre la base del Proyecto 1 (tag `proyecto1-base`). El despliegue en k3s se construye issue por issue; ver la tabla de estado al final de [PLAN.md](PLAN.md).
+**Estado (25/11/2026).** Están hechas la fase de despliegue, la recomendada (log en disco) y la de OpenTelemetry (trazas, métricas y logs). Falta la fase opcional de Longhorn (#30 y #31): queda como trabajo futuro (ver [Límites](#límites-y-trabajo-futuro)). El detalle está en la tabla de estado al final de [PLAN.md](PLAN.md).
+
+## Arquitectura: dos capas
+
+```
+  clientes, desde fuera del cluster (NodePort: puerto + 21000)
+                │
+                ▼
+┌─ k3s ─────────────────────────────────────────────────────────┐
+│                                                               │
+│    maquina1: Pod N3, primario                                 │
+│    disco: /var/lib/trucardo/nodo3                             │
+│       │                     │                                 │
+│       │ réplica y latido    │ réplica y latido                │
+│       ▼                     ▼                                 │
+│    maquina2: Pod N1,     maquina3: Pod N2,                    │
+│    backup                backup                               │
+│    disco: .../nodo1      disco: .../nodo2                     │
+│                                                               │
+└───────────────────────────────────────────────────────────────┘
+```
+
+**Kubernetes hace que los procesos existan.** El generador (`despliegue/manifiestos.py`) arma, desde la misma `TRUCARDO_NODOS` del Proyecto 1:
+
+- un Deployment de una réplica por nodo, con estrategia `Recreate`. Los nodos tienen id: no son réplicas intercambiables (D3, D4);
+- un Service por nodo, con el mismo nombre que el host del nodo y una IP fija. Cada Pod lo resuelve por `hostAliases`, sin depender del DNS del cluster (D5, #52);
+- una *liveness probe* más lenta que la detección de Trucardo, así Trucardo decide primero y Kubernetes repara después (D7);
+- 10 s de tolerancia a una máquina caída, así el Pod se reubica en alrededor de un minuto, y anti-afinidad preferida, para repartir los nodos sin impedir la reubicación (D8, D9);
+- un volumen `hostPath` por nodo, `/var/lib/trucardo/nodo<id>`, en la máquina donde corre (D14).
+
+**Trucardo decide quién manda y qué pasó en cada mesa.** No cambió su protocolo del Proyecto 1:
+
+- primario-backup con un log replicado;
+- elección Bully con épocas;
+- relojes de Lamport.
+
+Se le sumaron tres cosas:
+
+- **el log en disco** (#22): cada op se escribe con `fsync` antes de confirmarse;
+- **la recuperación al estilo Raft** (#23, D15): un nodo que vuelve, en la misma máquina o en otra, recorta lo que difiere del primario y recibe sólo lo que le falta;
+- **la telemetría opcional** (#11 a #28): trazas, métricas y logs por OpenTelemetry.
+
+Ninguna capa sabe de la otra. Kubernetes no sabe quién es el primario, y Trucardo no sabe que corre en Kubernetes: sólo ve nodos que se caen y vuelven.
 
 ## Documentos
 
@@ -316,6 +357,27 @@ sudo rm -rf /var/lib/trucardo
 - **Máquinas con varias interfaces de red:** sumá `--node-ip <ip de esa máquina>` al comando de instalación.
 - **Pods en `ErrImagePull` o `ImagePullBackOff`:** falta el paso 6 en esa máquina.
 
+## Experimentos
+
+[experimentos/README.md](experimentos/README.md) tiene 19 casos, cada uno con su guion, lo esperado, la evidencia con hora y el porqué. Se corrieron en el cluster local, y cada uno se puede repetir.
+
+| Casos | Qué muestran |
+| --- | --- |
+| 1 a 6 | Fallas de proceso y de infraestructura: borrar el Pod del primario, colgar un nodo, apagar la máquina de un backup y la del primario, actualizar la versión con una partida en curso, apagar el servidor k3s |
+| 7 | El límite: una partición de red deja dos primarios |
+| 8 a 11 | Persistencia: un backup reiniciado, un nodo que se muda con un log viejo, el apagón total y la operación confirmada sin acks que se pierde |
+| 12 a 15 | Trazas: una jugada replicada, una elección, una puesta al día y el cerebro dividido en Jaeger |
+| 16 a 19 | Métricas y logs: el tablero ante una caída y ante el cerebro dividido, de un log a su traza, y qué agrega OpenTelemetry a `kubectl` |
+
+## Límites y trabajo futuro
+
+- **Sin quórum, una partición deja dos primarios** (casos 7, 15 y 17). Las épocas lo resuelven al curarse, pero las ops que el primario viejo confirmó solo se pierden (caso 11). Evitarlo pide confirmar sólo con la mayoría, como Raft.
+- **Después de un apagón, el primero en volver se corona solo** (caso 10). Si es un backup atrasado, los que vuelven después pierden lo que él no tenía. Es el mismo límite.
+- **El disco es de la máquina, no del nodo** (D14). Un nodo que se muda arranca con lo que haya en la máquina nueva y se pone al día por la red. La fase de Longhorn (#30 y #31) iba a mostrar la alternativa: un volumen replicado que viaja con el Pod. No se hizo: el cluster local no puede correrlo (la imagen de k3s no trae `open-iscsi`), y hacía falta probarlo en máquinas reales.
+- **Kubernetes no detecta un nodo colgado** (caso 2). La *probe* TCP la contesta el kernel. Trucardo lo resuelve con sus latidos.
+- **Los clientes entran por la IP de una máquina.** Si esa máquina se apaga, hay que cambiar de IP (caso 6).
+- **La telemetría guarda su historia en el Pod.** Si Prometheus, Loki o Jaeger se mudan de máquina, se pierde. Una partición también corta la telemetría del lado aislado (caso 15).
+
 ## Cómo se trabaja
 
 Resumen de [PLAN.md](PLAN.md), sección 1:
@@ -328,6 +390,8 @@ Resumen de [PLAN.md](PLAN.md), sección 1:
 - Cada issue deja su registro en `registro-de-construccion/`.
 - Principios: YAGNI, DRY y Clean Code según la skill `ub-mode` (`.claude/skills/ub-mode/`).
 
-## Origen
+## Créditos
 
-Basado en Trucardo, Proyecto 1 de Sistemas Distribuidos 2026. La historia completa de ese desarrollo, con sus autores, se conserva en este repositorio.
+Basado en **Trucardo**, el Proyecto 1 de Sistemas Distribuidos 2026: el juego, el protocolo primario-backup, la elección Bully con épocas, el log replicado, los relojes de Lamport y los clientes. La historia completa de ese desarrollo, con sus autores, se conserva en este repositorio, y su estado final está en el tag `proyecto1-base`.
+
+El despliegue en k3s, la persistencia, la observabilidad y los experimentos son de este trabajo de promoción. Cada issue dejó su registro en [registro-de-construccion/](registro-de-construccion/), con su autor y cómo se trabajó.
