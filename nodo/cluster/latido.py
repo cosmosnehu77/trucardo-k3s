@@ -41,6 +41,7 @@ class Latido:
                                           self.m.mensaje(LATIDO, ultimo_seq=ultimo_seq),
                                           timeout=self.m.intervalo_latido)
         except OSError:
+            telemetria.latido_perdido(nodo, id_nodo)
             with nodo.lock:
                 if self.m.vivos.pop(id_nodo, None) is not None:
                     log.info(f"N{id_nodo} fuera de la vista: no contesta el latido")
@@ -64,7 +65,7 @@ class Latido:
         with nodo.lock:
             if id_nodo not in self.m.vivos:
                 log.info(f"N{id_nodo} entra a la vista (ultimo_seq {su_seq})")
-            self.m.vivos[id_nodo] = su_seq
+            self.m.anotar_seq(id_nodo, su_seq)
             difiere = (su_epoca, su_seq) != (nodo.estado.epoca_ultima, nodo.estado.ultimo_seq)
 
         # Aca es donde se atrapa al que estuvo caido y volvio: por la replica

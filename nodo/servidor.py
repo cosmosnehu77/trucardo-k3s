@@ -10,6 +10,7 @@
 import random
 import sys
 import threading
+import time
 import uuid
 
 import Pyro5.api
@@ -190,6 +191,7 @@ class ServidorTruco:
         """Aplica y replica una operacion, y devuelve su sello. Si es un
         reintento (mismo id_operacion), devuelve el sello de la primera vez
         sin aplicarla de nuevo."""
+        inicio = time.monotonic()
         token = context.attach(
             telemetria.de_anotaciones(Pyro5.callcontext.current_context.annotations)
         )
@@ -214,14 +216,19 @@ class ServidorTruco:
                     self._aplicar(op)
 
                     replicas = ""
+                    acks = esperados = None
                     if self.__membresia is not None:
                         respuestas = self.__membresia.replica.replicar(op)
                         if self.rol != "primario":
                             # replicando me entere de que ya no mando: no se confirma
                             raise NoPrimario(None)
-                        al_dia = sum(1 for r in respuestas.values() if r.get("ok"))
-                        replicas = f" · la tienen {al_dia}/{len(respuestas)} de los que contestaron"
+                        acks = sum(1 for r in respuestas.values() if r.get("ok"))
+                        esperados = len(self.__membresia.cluster) - 1
+                        replicas = f" · la tienen {acks}/{len(respuestas)} de los que contestaron"
 
+                    telemetria.operacion_confirmada(
+                        self, tipo, time.monotonic() - inicio, acks, esperados
+                    )
                     sesion = self.estado.sesion(id_sesion)
                     log.info(f"op {op['seq']} · {tipo} · {sesion.nombre} · "
                              f"mesa {sesion.id_mesa}{replicas}")
