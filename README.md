@@ -124,13 +124,20 @@ docker run --rm -it --network trucardo-k3s_maquinas -e TRUCARDO_NODOS="<valor>" 
 docker run --rm -it --network trucardo-k3s_maquinas -e TRUCARDO_NODOS="<valor>" trucardo:local python -m cliente.cliente beto
 ```
 
-**Trazas (opcional).** Con `--telemetria`, el generador suma Jaeger y hace que los nodos le manden sus trazas. Primero cargá también la imagen de Jaeger en las máquinas:
+**Telemetría (opcional).** Con `--telemetria`, el generador suma un *Collector* de OpenTelemetry, que reparte lo que mandan los nodos: las trazas a Jaeger, las métricas a Prometheus y los logs a Loki. Suma también Grafana, con un tablero de Trucardo. Primero cargá las imágenes en las máquinas:
 
 ```bash
-sh despliegue/cluster-local/cargar-imagen.sh jaegertracing/jaeger:2.23.0
+for i in jaegertracing/jaeger:2.23.0 otel/opentelemetry-collector:0.165.0 prom/prometheus:v3.16.0 grafana/loki:3.6.22 grafana/grafana:13.3.2; do sh despliegue/cluster-local/cargar-imagen.sh $i; done
 ```
 
-Después generá los manifiestos con `--telemetria` y aplicalos como antes. La interfaz de Jaeger queda en <http://172.30.0.11:30686>, y cada *span* dice en qué Pod y en qué máquina corrió (`k8s.pod.name` y `k8s.node.name`). Sin Kubernetes, `OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318 docker compose --profile telemetria up --build` levanta lo mismo, con la interfaz en <http://localhost:16686>.
+Después generá los manifiestos con `--telemetria` y aplicalos como antes. Quedan:
+
+- Grafana en <http://172.30.0.11:30300>, con el tablero «Trucardo». Desde una línea de log, el campo `trace_id` lleva a su traza;
+- Jaeger en <http://172.30.0.11:30686>;
+- Prometheus en <http://172.30.0.11:30090>;
+- para que un cliente externo mande sus trazas, `-e OTEL_EXPORTER_OTLP_ENDPOINT=http://172.30.0.11:30318`.
+
+Sin Kubernetes, `OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4318 docker compose --profile telemetria up --build` levanta lo mismo, con Grafana en <http://localhost:3000>.
 
 Para consultar quién es el primario desde afuera:
 

@@ -1,10 +1,14 @@
+import time
+
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from nodo import telemetria
 from nodo.config import Nodo
+from nodo.servidor import ServidorTruco
 from tests.test_config import _entorno
 from tests.test_membresia import (
+    LATIDO,
     _apagar,
     _cluster,
     _esperar,
@@ -158,3 +162,46 @@ def test_sin_configurar_las_funciones_de_dominio_no_fallan():
             telemetria.latido_perdido(membresia.nodo, 2)
         finally:
             telemetria.cerrar()
+
+
+def test_los_histogramas_usan_cubos_en_segundos():
+    lector = InMemoryMetricReader()
+    nodo = ServidorTruco(id_nodo=1)
+    telemetria.configurar("prueba", lector=lector)
+    try:
+        telemetria.operacion_confirmada(nodo, "crear", 0.02)
+        telemetria.eleccion(nodo, 0.02, "gano")
+
+        for nombre, atributos in (
+            ("trucardo.confirmacion.duracion", {"trucardo.nodo": 1}),
+            ("trucardo.eleccion.duracion", {"trucardo.nodo": 1, "resultado": "gano"}),
+        ):
+            punto = _punto(lector, nombre, atributos)
+            assert punto is not None
+            assert sum(punto.bucket_counts) == 1
+            indice = punto.bucket_counts.index(1)
+            assert indice < len(punto.explicit_bounds)
+            assert punto.explicit_bounds[indice] < 0.1
+    finally:
+        telemetria.cerrar()
+
+
+def test_tras_una_jugada_replicada_el_atraso_es_cero_sin_esperar_latido():
+    lector = InMemoryMetricReader()
+    telemetria.configurar("prueba", lector=lector)
+    _, membresias = _cluster()
+    try:
+        _esperar_estable(membresias, 3)
+        for m in membresias.values():
+            m.timeout = 60.0
+        membresias[3].intervalo_latido = 60.0
+        # Deja terminar cualquier latido corto en vuelo antes de operar.
+        time.sleep(LATIDO * 1.5)
+
+        membresias[3].nodo.crear_partida("ana", _id())
+
+        assert _valor(lector, "trucardo.backup.atraso", {"trucardo.nodo": 3, "backup": 1}) == 0
+        assert _valor(lector, "trucardo.backup.atraso", {"trucardo.nodo": 3, "backup": 2}) == 0
+    finally:
+        telemetria.cerrar()
+        _apagar(membresias)

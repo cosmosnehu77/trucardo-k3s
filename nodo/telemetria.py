@@ -18,6 +18,8 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 _INTERVALO_METRICAS_MS = 5000
+# Cubos en segundos: los por defecto del SDK estan pensados para milisegundos.
+_CUBOS_SEGUNDOS = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10)
 
 # Proveedor propio en vez de trace.set_tracer_provider: el global se fija
 # una sola vez por proceso y haria que los tests dependan del orden.
@@ -77,10 +79,18 @@ def _crear_instrumentos(meter):
     meter.create_observable_gauge("trucardo.backup.atraso", callbacks=[_observar_atraso])
     return {
         "operaciones": meter.create_counter("trucardo.operaciones"),
-        "confirmacion_duracion": meter.create_histogram("trucardo.confirmacion.duracion", unit="s"),
+        "confirmacion_duracion": meter.create_histogram(
+            "trucardo.confirmacion.duracion",
+            unit="s",
+            explicit_bucket_boundaries_advisory=_CUBOS_SEGUNDOS,
+        ),
         "sin_acks": meter.create_counter("trucardo.operaciones.sin_acks"),
         "elecciones": meter.create_counter("trucardo.elecciones"),
-        "eleccion_duracion": meter.create_histogram("trucardo.eleccion.duracion", unit="s"),
+        "eleccion_duracion": meter.create_histogram(
+            "trucardo.eleccion.duracion",
+            unit="s",
+            explicit_bucket_boundaries_advisory=_CUBOS_SEGUNDOS,
+        ),
         "latidos_perdidos": meter.create_counter("trucardo.latidos.perdidos"),
     }
 

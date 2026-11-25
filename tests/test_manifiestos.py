@@ -1,7 +1,9 @@
 import io
 import ipaddress
 import json
+import re
 from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
 
 from despliegue.manifiestos import main, manifiestos, texto_clientes
 from nodo import config
@@ -9,10 +11,45 @@ from tests.test_config import _entorno
 
 CLUSTER_TRES = "1@nodo1:9501:9601,2@nodo2:9502:9602,3@nodo3:9503:9603"
 IMAGEN = "trucardo:local"
+OBSERVABILIDAD_ESPERADA = {
+    "jaeger": ("jaegertracing/jaeger:2.23.0", "10.43.0.100"),
+    "collector": ("otel/opentelemetry-collector:0.165.0", "10.43.0.99"),
+    "prometheus": ("prom/prometheus:v3.16.0", "10.43.0.98"),
+    "loki": ("grafana/loki:3.6.22", "10.43.0.97"),
+    "grafana": ("grafana/grafana:13.3.2", "10.43.0.96"),
+}
+_COMPOSE = Path(__file__).resolve().parent.parent / "docker-compose.yml"
 
 
 def _por_tipo(objetos, kind):
     return [obj for obj in objetos if obj["kind"] == kind]
+
+
+def _por_nombre(objetos, kind):
+    return {obj["metadata"]["name"]: obj for obj in _por_tipo(objetos, kind)}
+
+
+def _imagenes_compose():
+    imagenes = {}
+    en_services = False
+    servicio = None
+    for linea in _COMPOSE.read_text(encoding="utf-8").splitlines():
+        if not linea.strip() or linea.lstrip().startswith("#"):
+            continue
+        if not linea.startswith(" "):
+            en_services = linea.strip() == "services:"
+            servicio = None
+            continue
+        if not en_services:
+            continue
+        coincide_servicio = re.match(r"^  ([a-z0-9_-]+):\s*$", linea)
+        if coincide_servicio:
+            servicio = coincide_servicio.group(1)
+            continue
+        coincide_imagen = re.match(r"^    image:\s*(\S+)", linea)
+        if servicio and coincide_imagen:
+            imagenes[servicio] = coincide_imagen.group(1)
+    return imagenes
 
 
 def test_un_deployment_y_un_service_por_nodo_ordenados_por_id():
@@ -341,70 +378,160 @@ def test_cli_pide_imagen_o_clientes():
                 raise AssertionError(f"argv {argv!r} tendria que haber terminado con SystemExit")
 
 
-def test_sin_telemetria_no_aparece_jaeger_ni_variables_otel():
+def test_sin_telemetria_no_aparece_observabilidad_ni_variables_otel():
     objetos = manifiestos(CLUSTER_TRES, IMAGEN)
 
     assert objetos == manifiestos(CLUSTER_TRES, IMAGEN, telemetria=False)
-    assert all(obj["metadata"]["name"] != "jaeger" for obj in objetos)
+    assert _por_tipo(objetos, "ConfigMap") == []
+    assert all(obj["metadata"]["name"] not in OBSERVABILIDAD_ESPERADA for obj in objetos)
     for d in _por_tipo(objetos, "Deployment"):
         pod = d["spec"]["template"]["spec"]
         for alias in pod["hostAliases"]:
-            assert "jaeger" not in alias["hostnames"]
+            assert not (set(alias["hostnames"]) & set(OBSERVABILIDAD_ESPERADA))
         for c in pod["containers"]:
             for var in c["env"]:
                 assert not var["name"].startswith(("OTEL_", "K8S_"))
 
 
-def test_con_telemetria_agrega_deployment_y_service_jaeger():
+def test_con_telemetria_agrega_pila_de_observabilidad_con_imagenes_e_ips_fijas():
     objetos = manifiestos(CLUSTER_TRES, IMAGEN, telemetria=True)
+    deployments = _por_nombre(objetos, "Deployment")
+    services = _por_nombre(objetos, "Service")
+    configmaps = _por_nombre(objetos, "ConfigMap")
 
-    assert len(objetos) == 8
-    dep_jaeger, svc_jaeger = objetos[-2], objetos[-1]
+    for nombre, (imagen, ip) in OBSERVABILIDAD_ESPERADA.items():
+        assert nombre in deployments
+        assert nombre in services
+        dep = deployments[nombre]
+        svc = services[nombre]
+        assert dep["apiVersion"] == "apps/v1"
+        assert dep["metadata"] == {"name": nombre, "labels": {"app": nombre}}
+        assert dep["spec"]["replicas"] == 1
+        assert dep["spec"]["selector"] == {"matchLabels": {"app": nombre}}
+        assert dep["spec"]["template"]["metadata"]["labels"] == {"app": nombre}
+        contenedores = dep["spec"]["template"]["spec"]["containers"]
+        assert len(contenedores) == 1
+        assert contenedores[0]["name"] == nombre
+        assert contenedores[0]["image"] == imagen
+        assert contenedores[0]["imagePullPolicy"] == "IfNotPresent"
+        assert svc["apiVersion"] == "v1"
+        assert svc["metadata"] == {"name": nombre, "labels": {"app": nombre}}
+        assert svc["spec"]["clusterIP"] == ip
+        assert svc["spec"]["selector"] == {"app": nombre}
 
-    assert dep_jaeger["apiVersion"] == "apps/v1"
-    assert dep_jaeger["kind"] == "Deployment"
-    assert dep_jaeger["metadata"] == {"name": "jaeger", "labels": {"app": "jaeger"}}
-    assert dep_jaeger["spec"]["replicas"] == 1
-    assert dep_jaeger["spec"]["selector"] == {"matchLabels": {"app": "jaeger"}}
-    assert dep_jaeger["spec"]["template"]["metadata"]["labels"] == {"app": "jaeger"}
+    assert set(configmaps) == {"collector", "prometheus", "grafana"}
+    assert set(configmaps["collector"]["data"]) == {"collector.json"}
+    assert set(configmaps["prometheus"]["data"]) == {"prometheus.json"}
+    assert set(configmaps["grafana"]["data"]) == {
+        "fuentes.yaml",
+        "tableros.yaml",
+        "tablero-trucardo.json",
+    }
 
-    contenedores = dep_jaeger["spec"]["template"]["spec"]["containers"]
-    assert len(contenedores) == 1
-    c = contenedores[0]
-    assert c["name"] == "jaeger"
-    assert c["image"] == "jaegertracing/jaeger:2.23.0"
-    assert c["ports"] == [
-        {"name": "interfaz", "containerPort": 16686},
-        {"name": "otlp", "containerPort": 4318},
+    for nombre in ("collector", "prometheus", "grafana"):
+        pos_cm = objetos.index(configmaps[nombre])
+        pos_dep = objetos.index(deployments[nombre])
+        assert pos_cm < pos_dep
+
+    c_collector = deployments["collector"]["spec"]["template"]["spec"]["containers"][0]
+    assert c_collector["args"] == ["--config=/etc/otelcol/collector.json"]
+    assert any(m["mountPath"] == "/etc/otelcol" for m in c_collector["volumeMounts"])
+
+    c_prometheus = deployments["prometheus"]["spec"]["template"]["spec"]["containers"][0]
+    assert c_prometheus["args"] == [
+        "--config.file=/etc/prometheus/prometheus.json",
+        "--web.enable-otlp-receiver",
     ]
+    assert any(m["mountPath"] == "/etc/prometheus" for m in c_prometheus["volumeMounts"])
 
-    assert svc_jaeger["apiVersion"] == "v1"
-    assert svc_jaeger["kind"] == "Service"
-    assert svc_jaeger["metadata"] == {"name": "jaeger", "labels": {"app": "jaeger"}}
-    assert svc_jaeger["spec"]["type"] == "NodePort"
-    assert svc_jaeger["spec"]["clusterIP"] == "10.43.0.100"
-    assert svc_jaeger["spec"]["selector"] == {"app": "jaeger"}
-    assert svc_jaeger["spec"]["ports"] == [
+    c_grafana = deployments["grafana"]["spec"]["template"]["spec"]["containers"][0]
+    montajes_grafana = {(m["mountPath"], m.get("subPath")) for m in c_grafana["volumeMounts"]}
+    assert montajes_grafana == {
+        ("/etc/grafana/provisioning/datasources/fuentes.yaml", "fuentes.yaml"),
+        ("/etc/grafana/provisioning/dashboards/tableros.yaml", "tableros.yaml"),
+        ("/etc/grafana/tableros/tablero-trucardo.json", "tablero-trucardo.json"),
+    }
+    env_grafana = {e["name"]: e["value"] for e in c_grafana["env"]}
+    assert env_grafana == {
+        "GF_AUTH_ANONYMOUS_ENABLED": "true",
+        "GF_AUTH_ANONYMOUS_ORG_ROLE": "Admin",
+        "GF_AUTH_DISABLE_LOGIN_FORM": "true",
+    }
+
+
+def test_con_telemetria_los_nodeports_siguen_d6_y_loki_es_cluster_ip():
+    services = _por_nombre(manifiestos(CLUSTER_TRES, IMAGEN, telemetria=True), "Service")
+
+    assert services["jaeger"]["spec"]["type"] == "NodePort"
+    assert services["jaeger"]["spec"]["ports"] == [
         {"name": "interfaz", "port": 9686, "targetPort": 16686, "nodePort": 30686},
+        {"name": "consulta", "port": 16686, "targetPort": 16686},
         {"name": "otlp", "port": 4318, "targetPort": 4318},
     ]
 
+    assert services["collector"]["spec"]["type"] == "NodePort"
+    puertos_collector = services["collector"]["spec"]["ports"]
+    assert {"port": 4318, "targetPort": 4318} in [
+        {"port": p["port"], "targetPort": p["targetPort"]} for p in puertos_collector
+    ]
+    externos_collector = [p for p in puertos_collector if "nodePort" in p]
+    assert len(externos_collector) == 1
+    assert externos_collector[0]["port"] == 9318
+    assert externos_collector[0]["targetPort"] == 4318
+    assert externos_collector[0]["nodePort"] == 30318
 
-def test_con_telemetria_los_nodos_apuntan_a_jaeger_y_declaran_downward_api():
+    assert services["prometheus"]["spec"]["type"] == "NodePort"
+    puertos_prom = services["prometheus"]["spec"]["ports"]
+    assert len(puertos_prom) == 1
+    assert puertos_prom[0]["port"] == 9090
+    assert puertos_prom[0]["targetPort"] == 9090
+    assert puertos_prom[0]["nodePort"] == 30090
+
+    assert services["loki"]["spec"]["type"] == "ClusterIP"
+    puertos_loki = services["loki"]["spec"]["ports"]
+    assert len(puertos_loki) == 1
+    assert puertos_loki[0]["port"] == 3100
+    assert puertos_loki[0]["targetPort"] == 3100
+    assert all("nodePort" not in p for p in puertos_loki)
+
+    assert services["grafana"]["spec"]["type"] == "NodePort"
+    puertos_grafana = services["grafana"]["spec"]["ports"]
+    assert len(puertos_grafana) == 1
+    assert puertos_grafana[0]["port"] == 9300
+    assert puertos_grafana[0]["targetPort"] == 3000
+    assert puertos_grafana[0]["nodePort"] == 30300
+
+
+def test_con_telemetria_configmap_collector_tiene_las_tres_canalizaciones():
+    configmaps = _por_nombre(manifiestos(CLUSTER_TRES, IMAGEN, telemetria=True), "ConfigMap")
+    cfg = json.loads(configmaps["collector"]["data"]["collector.json"])
+    canalizaciones = cfg["service"]["pipelines"]
+    exporters = cfg["exporters"]
+
+    assert set(canalizaciones) == {"traces", "metrics", "logs"}
+    destinos = {
+        "traces": "jaeger",
+        "metrics": "prometheus",
+        "logs": "loki",
+    }
+    for senal, destino in destinos.items():
+        nombres_exp = canalizaciones[senal]["exporters"]
+        assert any(destino in exporters[nombre]["endpoint"] for nombre in nombres_exp)
+
+
+def test_con_telemetria_los_nodos_apuntan_al_collector_y_declaran_downward_api():
     objetos = manifiestos(CLUSTER_TRES, IMAGEN, telemetria=True)
     deployments_nodos = [
-        d for d in _por_tipo(objetos, "Deployment") if d["metadata"]["name"] != "jaeger"
+        d for d in _por_tipo(objetos, "Deployment") if d["metadata"]["name"].startswith("trucardo-nodo")
     ]
 
     assert len(deployments_nodos) == 3
     for d in deployments_nodos:
-        pod = d["spec"]["template"]["spec"]
-        assert pod["hostAliases"][-1] == {"ip": "10.43.0.100", "hostnames": ["jaeger"]}
-        env = pod["containers"][0]["env"]
+        env = d["spec"]["template"]["spec"]["containers"][0]["env"]
         assert env[-4:] == [
             {"name": "K8S_POD_NAME", "valueFrom": {"fieldRef": {"fieldPath": "metadata.name"}}},
             {"name": "K8S_NODE_NAME", "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}}},
-            {"name": "OTEL_EXPORTER_OTLP_ENDPOINT", "value": "http://jaeger:4318"},
+            {"name": "OTEL_EXPORTER_OTLP_ENDPOINT", "value": "http://collector:4318"},
             {
                 "name": "OTEL_RESOURCE_ATTRIBUTES",
                 "value": "k8s.pod.name=$(K8S_POD_NAME),k8s.node.name=$(K8S_NODE_NAME)",
@@ -412,7 +539,56 @@ def test_con_telemetria_los_nodos_apuntan_a_jaeger_y_declaran_downward_api():
         ]
 
 
-def test_cli_con_telemetria_imprime_json_con_jaeger():
+def test_con_telemetria_todos_los_pods_tienen_host_aliases_de_observabilidad():
+    objetos = manifiestos(CLUSTER_TRES, IMAGEN, telemetria=True)
+    deployments = _por_tipo(objetos, "Deployment")
+    services = _por_nombre(objetos, "Service")
+
+    aliases_obs = {
+        (services[nombre]["spec"]["clusterIP"], nombre) for nombre in OBSERVABILIDAD_ESPERADA
+    }
+    aliases_nodos = {
+        (services[f"nodo{i}"]["spec"]["clusterIP"], f"nodo{i}") for i in (1, 2, 3)
+    }
+
+    assert len(deployments) == 3 + len(OBSERVABILIDAD_ESPERADA)
+    for d in deployments:
+        aliases = {
+            (a["ip"], host)
+            for a in d["spec"]["template"]["spec"]["hostAliases"]
+            for host in a["hostnames"]
+        }
+        if d["metadata"]["name"].startswith("trucardo-nodo"):
+            assert aliases == aliases_nodos | aliases_obs
+        else:
+            assert aliases == aliases_obs
+
+
+def test_las_imagenes_coinciden_con_docker_compose():
+    from despliegue.manifiestos import (
+        IMAGEN_COLLECTOR,
+        IMAGEN_GRAFANA,
+        IMAGEN_JAEGER,
+        IMAGEN_LOKI,
+        IMAGEN_PROMETHEUS,
+    )
+
+    esperadas = {
+        "jaeger": IMAGEN_JAEGER,
+        "collector": IMAGEN_COLLECTOR,
+        "prometheus": IMAGEN_PROMETHEUS,
+        "loki": IMAGEN_LOKI,
+        "grafana": IMAGEN_GRAFANA,
+    }
+    en_compose = _imagenes_compose()
+    deployments = _por_nombre(manifiestos(CLUSTER_TRES, IMAGEN, telemetria=True), "Deployment")
+
+    for nombre, imagen in esperadas.items():
+        assert en_compose[nombre] == imagen
+        assert deployments[nombre]["spec"]["template"]["spec"]["containers"][0]["image"] == imagen
+
+
+def test_cli_con_telemetria_imprime_json_con_observabilidad():
     buffer = io.StringIO()
     with _entorno(TRUCARDO_NODOS=CLUSTER_TRES):
         with redirect_stdout(buffer):
@@ -424,7 +600,8 @@ def test_cli_con_telemetria_imprime_json_con_jaeger():
         "kind": "List",
         "items": manifiestos(CLUSTER_TRES, IMAGEN, telemetria=True),
     }
-    assert any(item["metadata"]["name"] == "jaeger" for item in datos["items"])
+    nombres = {item["metadata"]["name"] for item in datos["items"]}
+    assert set(OBSERVABILIDAD_ESPERADA) <= nombres
 
 
 def test_cli_clientes_con_telemetria_termina_con_error():

@@ -50,6 +50,8 @@ class Replicador:
             return respuestas
 
         for id_nodo, respuesta in respuestas.items():
+            if respuesta.get("ok"):
+                self.m.anotar_seq(id_nodo, respuesta.get("ultimo_seq", 0))
             motivo = respuesta.get("motivo")
             if motivo == ATRASADO:
                 self.poner_al_dia_aparte(id_nodo, respuesta.get("ultimo_seq", 0),
