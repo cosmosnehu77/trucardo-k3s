@@ -766,7 +766,7 @@ Cuando lo que se agrega es una fase entera, sus issues van en su fase y acá que
 | #8 | Cluster local de desarrollo | ✅ |
 | #9 | Despliegue en máquinas reales | ✅ |
 | #10 | Experimentos de falla en k3s | ⏳ |
-| #22 | Log de operaciones en disco (recomendada) | ⏳ |
+| #22 | Log de operaciones en disco (recomendada) | ✅ |
 | #23 | Recuperación consistente desde el disco (recomendada) | ⏳ |
 | #24 | Un volumen por nodo en compose y k3s (recomendada) | ⏳ |
 | #25 | Experimentos de persistencia (recomendada) | ⏳ |
