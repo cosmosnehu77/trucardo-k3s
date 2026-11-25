@@ -811,6 +811,33 @@ Cuando lo que se agrega es una fase entera, sus issues van en su fase y acá que
 
 ---
 
+### #72 Visor en vivo del cluster
+- **Requisitos:** RF-21
+- **Tipo:** código
+- **Depende de:** #5, #28
+- **Problema:** para ver qué corre en cada máquina, quién es el primario y qué se mandan los nodos y los clientes hay que juntar `kubectl`, Grafana y Jaeger. Para la defensa conviene verlo todo junto, en vivo.
+- **Qué hacer:**
+  - primero, tests de las funciones puras que arman la instantánea: máquinas, Pods, nodos de Trucardo, mesas, mensajes sacados de las trazas y jugadores;
+  - un Pod `visor` con la misma imagen, una cuenta de sólo lectura (`nodes` y `pods`) y un `NodePort` (9808 → 30808), con IP fija y `hostAliases` como los nodos;
+  - una página que dibuja el cluster en isométrico y se actualiza cada segundo, con una ficha por pieza al hacer clic.
+- **Criterios de aceptación:**
+  - al apagar una máquina, el visor la marca caída y muestra cómo sus Pods se crean en otra;
+  - con telemetría, los mensajes del cliente al primario y del primario a los backups se ven como pulsos.
+- **Tests:** `tests/test_visor.py` y los de `--visor` en `tests/test_manifiestos.py`.
+
+---
+
+### #73 Un backup queda trabado si su log diverge del primario en la misma época
+- **Requisitos:** RF-21
+- **Tipo:** código
+- **Depende de:** #22, #23
+- **Problema:** el visor mostró a N3 parado en la op 16 mientras N2, primario, seguía avanzando. Cada segundo intentaba ponerse al día y cortaba en la op 17, porque esa jugada no era válida sobre su estado. El detalle está en la issue.
+- **Qué hacer:** reproducirlo con un test, encontrar por qué el log de N3 diverge del primario sin que cambie la época, y que la puesta al día lo resuelva.
+- **Criterios de aceptación:** un backup con un log divergente vuelve a seguir al primario.
+- **Tests:** el que reproduce el caso, que tiene que fallar antes del cambio.
+
+---
+
 ## 11. Calendario sugerido
 
 | Día | Issues | Nota |
@@ -860,6 +887,8 @@ Cuando lo que se agrega es una fase entera, sus issues van en su fase y acá que
 | #21 | Replanificación: volúmenes, métricas y logs, y Longhorn | ✅ |
 | #33 | Regla de comentarios en el código | ✅ |
 | #36 | Imagen con Python 3.15 | ✅ |
+| #72 | Visor en vivo del cluster | ✅ |
+| #73 | Un backup queda trabado si su log diverge del primario en la misma época | ⏳ |
 
 La tabla sigue el **orden de trabajo**, no el numérico.
 
