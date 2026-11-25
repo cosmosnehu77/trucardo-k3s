@@ -15,3 +15,9 @@ proj/
 
 # variables de docker compose por compu
 .env
+
+# kubeconfig generado por el cluster local
+despliegue/cluster-local/salida/
+
+# manifiestos generados (ver README)
+trucardo.json
