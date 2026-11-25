@@ -200,7 +200,7 @@ Las toma el plan para que no se rediscutan en cada issue. Si una resulta equivoc
 | D2 | El generador emite **JSON**, no YAML | `kubectl` acepta JSON y la biblioteca estándar alcanza. Evita sumar PyYAML (RNF-07) |
 | D3 | Un **Deployment de 1 réplica por nodo**, con estrategia `Recreate` | Los nodos tienen id: no son réplicas intercambiables. `Recreate` evita dos procesos con el mismo id durante una actualización (RF-07) |
 | D4 | Deployment y no StatefulSet | El StatefulSet no se recupera solo de una máquina apagada (lo demuestra la nota de investigación). Con Deployments la reubicación es automática (RF-05), y el riesgo de duplicado ante una partición lo acotan las épocas de Trucardo |
-| D5 | Un Service por nodo, con **el mismo nombre que el host** en `TRUCARDO_NODOS` | La configuración de los nodos no cambia: `nodo1` ya resuelve (RF-02) |
+| D5 | Un Service por nodo, con **el mismo nombre que el host** en `TRUCARDO_NODOS` | La configuración de los nodos no cambia: `nodo1` ya resuelve (RF-02). Desde la #52 resuelve por `hostAliases` a la IP fija del Service, sin depender de CoreDNS |
 | D6 | Clientes externos por **NodePort**, con puerto externo = puerto interno + 21000 (9501 → 30501, 9601 → 30601) | Cae dentro del rango de NodePort (30000–32767) y es deducible: una regla en una sola función |
 | D7 | *Liveness probe* TCP al puerto del cluster, con una detección **más lenta** que `TIMEOUT_CAIDO` | Trucardo decide primero y Kubernetes repara después (RNF-08). La probe se calcula desde `nodo/config.py` |
 | D8 | Tolerancia de **10 s** a máquinas `unreachable` / `not-ready` (el valor por defecto es 300 s) | Reubicación en ≈1 min (RF-05) |
@@ -821,7 +821,7 @@ Cuando lo que se agrega es una fase entera, sus issues van en su fase y acá que
 | #23 | Recuperación consistente desde el disco (recomendada) | ✅ |
 | #24 | Un volumen por nodo en compose y k3s (recomendada) | ✅ |
 | #25 | Experimentos de persistencia (recomendada) | ✅ |
-| #52 | Los nodos se encuentran sin depender del DNS del cluster | ⏳ |
+| #52 | Los nodos se encuentran sin depender del DNS del cluster | ✅ |
 | #53 | Una elección tardía dispara otra aunque ya haya primario | ⏳ |
 | #11 | SDK de OpenTelemetry (extra) | ⏳ |
 | #12 | Contexto entre nodos e hilos (extra) | ⏳ |

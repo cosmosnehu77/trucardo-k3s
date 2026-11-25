@@ -310,8 +310,44 @@ Al volver `maquina1` (07:53:00), los dos primarios se encuentran:
 
   Al apagar `maquina1`, `kube-proxy` sigue ruteando en las otras máquinas, pero nadie contesta las consultas de DNS. N1 y N2 no se encuentran, y cada uno gana su elección sin rivales («contestaron 0 de 2»).
 - **Por eso cada jugada tardaba 7,5 a 15 s.** Cada envío del primario se quedaba 20 s resolviendo un nombre, pero el primario espera como mucho 2 s por nodo: confirmaba la jugada a los 4 s, con «0/0». El cliente espera 2 s (`TIMEOUT_RPC`) y hace una pausa de 0,5 s, así que cortaba antes y probaba el nodo siguiente. Al dar la vuelta a los tres nodos (7,5 s), el primero ya había terminado y contestaba que era un reintento. Si la consulta anterior también daba la vuelta, sumaba 15 s. Así, cada jugada se aplicó **en los dos** primarios. Por casualidad, los dos logs quedaron iguales, y al reencontrarse no hubo nada que recortar. Con dos clientes entrando por lados distintos, divergirían, como en el caso 7.
-- **El servidor de k3s es un punto único de falla para Trucardo**, aunque no debería serlo. Se corrige en la [#52](https://github.com/cosmosnehu77/trucardo-k3s/issues/52): IPs fijas para los Services y nombres en `/etc/hosts` de cada Pod, sin pasar por CoreDNS.
+- **El servidor de k3s era un punto único de falla para Trucardo**, aunque no debería serlo. Se corrigió en la #52 (ver abajo).
 - **Los clientes también dependen de una IP.** El valor de `--clientes` apunta todos los nodos a la IP de una sola máquina. Si esa máquina se apaga, el cliente no llega a nadie aunque los nodos sigan vivos. Por eso hubo que cambiar a `172.30.0.12` antes de apagar.
+
+**Después de la #52.** Cada Service tiene una IP fija (`10.43.0.101` a `10.43.0.103`), y cada Pod tiene esos nombres en su `/etc/hosts`:
+
+```
+$ k get svc -o custom-columns=NOMBRE:.metadata.name,IP:.spec.clusterIP
+nodo1        10.43.0.101
+nodo2        10.43.0.102
+nodo3        10.43.0.103
+
+$ k exec <pod de N2> -- cat /etc/hosts
+# Entries added by HostAliases.
+10.43.0.101	nodo1
+10.43.0.102	nodo2
+10.43.0.103	nodo3
+```
+
+Con el mismo guion (N3, el primario, en `maquina1`) queda **un solo** primario:
+
+```
+08:40:18 docker compose stop maquina1 (servidor k3s y N3, primario)
+08:40:21 [N2│BACKUP│e=11] 3.5 s sin latido de N3: lo doy por caido
+08:40:22 [N1│BACKUP│e=11] arranco una eleccion (epoca_ultima 11, ultimo_seq 1186)
+08:40:22 [N2│BACKUP│e=11] arranco una eleccion (epoca_ultima 11, ultimo_seq 1186)
+08:40:23 [N2│BACKUP│e=11] nadie me gana (contestaron 1 de 2): me corono
+08:40:23 [N2│PRIMARIO│e=12] gano la eleccion: soy el primario de la epoca 12
+08:40:23 [N1│BACKUP│e=11] N2 es el primario de la epoca 12
+08:40:25 beto: tira 1 de oro (primario N2, 6.6 s)
+08:40:29 leo: tira 3 de oro (primario N2, 1.0 s)
+08:41:24 beto: tira 10 de copa (primario N2, 1.0 s)
+
+08:41:22 quien_es → 1 BACKUP e=12 1230 | 2 PRIMARIO e=12 1230 | 3 no responde
+al volver maquina1 → 1 BACKUP e=12 1237 | 2 PRIMARIO e=12 1237 | 3 BACKUP e=12 1237
+```
+
+- **N1 y N2 se encuentran** («contestaron 1 de 2»), porque `nodo1` y `nodo2` se resuelven en `/etc/hosts`. Las IPs de los Services las sigue ruteando `kube-proxy` en cada máquina, sin el servidor.
+- **Cada jugada tarda 1 s**, la espera del ack de N3, como en los casos 3 y 4. Esta vez dura hasta que vuelve `maquina1`, porque sin plano de control nadie recrea el Pod de N3 en otra máquina.
 
 ## 7. Límite: partición de red
 
