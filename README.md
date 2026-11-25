@@ -124,6 +124,14 @@ docker run --rm -it --network trucardo-k3s_maquinas -e TRUCARDO_NODOS="<valor>" 
 docker run --rm -it --network trucardo-k3s_maquinas -e TRUCARDO_NODOS="<valor>" trucardo:local python -m cliente.cliente beto
 ```
 
+**Trazas (opcional).** Con `--telemetria`, el generador suma Jaeger y hace que los nodos le manden sus trazas. Primero cargá también la imagen de Jaeger en las máquinas:
+
+```bash
+sh despliegue/cluster-local/cargar-imagen.sh jaegertracing/jaeger:2.23.0
+```
+
+Después generá los manifiestos con `--telemetria` y aplicalos como antes. La interfaz de Jaeger queda en <http://172.30.0.11:30686>, y cada *span* dice en qué Pod y en qué máquina corrió (`k8s.pod.name` y `k8s.node.name`). Sin Kubernetes, `OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318 docker compose --profile telemetria up --build` levanta lo mismo, con la interfaz en <http://localhost:16686>.
+
 Para consultar quién es el primario desde afuera:
 
 ```bash
