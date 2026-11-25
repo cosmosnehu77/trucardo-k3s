@@ -51,9 +51,12 @@ class Latido:
         if not respuesta.get("ok"):
             with nodo.lock:
                 if respuesta.get("motivo") == EPOCA_VIEJA and nodo.rol == "primario":
-                    log.info(f"N{id_nodo} me rechaza el latido: hay epoca "
-                             f"{respuesta.get('epoca')} y yo estoy en la {nodo.epoca}")
-                    self.m.degradarme(respuesta.get("epoca", 0))
+                    epoca_nueva = respuesta.get("epoca", 0)
+                    with telemetria.span("latido rechazado", nodo,
+                                         destino=id_nodo, epoca_nueva=epoca_nueva):
+                        log.info(f"N{id_nodo} me rechaza el latido: hay epoca "
+                                 f"{respuesta.get('epoca')} y yo estoy en la {nodo.epoca}")
+                        self.m.degradarme(epoca_nueva)
             return
 
         su_seq = respuesta.get("ultimo_seq", 0)

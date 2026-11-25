@@ -80,31 +80,34 @@ class Replicador:
                 faltantes = nodo.estado.log[desde:]
                 if desde == su_seq and not faltantes:
                     return
-                pedido = self.m.mensaje(PUESTA_AL_DIA, desde=desde, ops=faltantes)
                 mi_seq = nodo.estado.ultimo_seq
 
-            if desde < su_seq:
-                log.info(f"N{id_nodo} diverge desde la op {desde + 1}: "
-                         f"recorta a la {desde} y le mando {len(faltantes)}")
-            else:
-                log.info(f"N{id_nodo} esta en la op {su_seq} y yo en la {mi_seq}: "
-                         f"le mando las {len(faltantes)} que le faltan")
-            try:
-                respuesta = transporte.enviar(self.m.direccion(id_nodo), pedido,
-                                              timeout=self.m.timeout)
-            except OSError:
-                log.info(f"no pude ponerlo al dia a N{id_nodo}: no contesta")
-                return
+            with telemetria.span("puesta al dia", nodo, destino=id_nodo,
+                                 desde=desde, cantidad=len(faltantes)):
+                pedido = self.m.mensaje(PUESTA_AL_DIA, desde=desde, ops=faltantes)
 
-            nodo.reloj.recibir(respuesta.get("lamport", 0))
-            with nodo.lock:
-                if id_nodo in self.m.vivos:
-                    self.m.vivos[id_nodo] = respuesta.get("ultimo_seq", 0)
-            if respuesta.get("ok"):
-                log.info(f"N{id_nodo} quedo al dia en la op {respuesta.get('ultimo_seq')}")
-            else:
-                log.warning(f"N{id_nodo} sigue en la op {respuesta.get('ultimo_seq')}: "
-                            f"{respuesta.get('motivo')}")
+                if desde < su_seq:
+                    log.info(f"N{id_nodo} diverge desde la op {desde + 1}: "
+                             f"recorta a la {desde} y le mando {len(faltantes)}")
+                else:
+                    log.info(f"N{id_nodo} esta en la op {su_seq} y yo en la {mi_seq}: "
+                             f"le mando las {len(faltantes)} que le faltan")
+                try:
+                    respuesta = transporte.enviar(self.m.direccion(id_nodo), pedido,
+                                                  timeout=self.m.timeout)
+                except OSError:
+                    log.info(f"no pude ponerlo al dia a N{id_nodo}: no contesta")
+                    return
+
+                nodo.reloj.recibir(respuesta.get("lamport", 0))
+                with nodo.lock:
+                    if id_nodo in self.m.vivos:
+                        self.m.vivos[id_nodo] = respuesta.get("ultimo_seq", 0)
+                if respuesta.get("ok"):
+                    log.info(f"N{id_nodo} quedo al dia en la op {respuesta.get('ultimo_seq')}")
+                else:
+                    log.warning(f"N{id_nodo} sigue en la op {respuesta.get('ultimo_seq')}: "
+                                f"{respuesta.get('motivo')}")
         finally:
             with nodo.lock:
                 self._poniendo_al_dia.discard(id_nodo)
@@ -114,21 +117,38 @@ class Replicador:
     def _a_las_replicas(self, mensaje):
         #REPLICA: aplico la op si viene del primario que reconozco. Cuenta tambien como un latido.
         origen, epoca = mensaje["origen"], mensaje.get("epoca", 0)
+        op = mensaje.get("op")
+        atributos = ({"seq": op.get("seq"), "lamport": op.get("lamport")}
+                     if isinstance(op, dict) else {})
 
         with self.m.nodo.lock:
-            if self.m.lo_rechazo(origen, epoca):
-                return self.m.respuesta(EPOCA_VIEJA)
-            self.m.adoptar_primario(origen, epoca)
-            return self.m.respuesta(
-                self.m.nodo._atiendo_replica(mensaje.get("op"), mensaje.get("previa")))
+            with telemetria.span("replica", self.m.nodo, **atributos) as actual:
+                if self.m.lo_rechazo(origen, epoca):
+                    motivo = EPOCA_VIEJA
+                else:
+                    self.m.adoptar_primario(origen, epoca)
+                    actual.set_attribute("trucardo.epoca", self.m.nodo.epoca)
+                    actual.set_attribute("trucardo.rol", self.m.nodo.rol)
+                    motivo = self.m.nodo._atiendo_replica(op, mensaje.get("previa"))
+                if motivo is not None:
+                    actual.set_attribute("trucardo.motivo", motivo)
+                return self.m.respuesta(motivo)
 
     def _a_la_puesta_al_dia(self, mensaje):
         origen, epoca = mensaje["origen"], mensaje.get("epoca", 0)
+        ops = mensaje.get("ops") or []
+        desde = mensaje["desde"]
 
         with self.m.nodo.lock:
-            if self.m.lo_rechazo(origen, epoca):
-                return self.m.respuesta(EPOCA_VIEJA)
-            self.m.adoptar_primario(origen, epoca)
-            return self.m.respuesta(
-                self.m.nodo._atiendo_puesta_al_dia(
-                    mensaje.get("ops") or [], mensaje["desde"], epoca))
+            with telemetria.span("puesta al dia recibida", self.m.nodo,
+                                 desde=desde, cantidad=len(ops)) as actual:
+                if self.m.lo_rechazo(origen, epoca):
+                    motivo = EPOCA_VIEJA
+                else:
+                    self.m.adoptar_primario(origen, epoca)
+                    actual.set_attribute("trucardo.epoca", self.m.nodo.epoca)
+                    actual.set_attribute("trucardo.rol", self.m.nodo.rol)
+                    motivo = self.m.nodo._atiendo_puesta_al_dia(ops, desde, epoca)
+                if motivo is not None:
+                    actual.set_attribute("trucardo.motivo", motivo)
+                return self.m.respuesta(motivo)

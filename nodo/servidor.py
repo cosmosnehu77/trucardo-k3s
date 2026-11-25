@@ -194,34 +194,38 @@ class ServidorTruco:
             telemetria.de_anotaciones(Pyro5.callcontext.current_context.annotations)
         )
         try:
-            with self.lock:
-                self.reloj.recibir(lamport)
-                self._exigir_primario()
-                if self.estado.ya_aplicada(id_sesion, id_operacion):
+            with telemetria.span(f"jugada {tipo}", self) as actual:
+                with self.lock:
+                    self.reloj.recibir(lamport)
+                    self._exigir_primario()
+                    if self.estado.ya_aplicada(id_sesion, id_operacion):
+                        sesion = self.estado.sesion(id_sesion)
+                        actual.set_attribute("trucardo.reintento", True)
+                        log.info(f"reintento de {sesion.nombre} ({str(id_operacion)[:8]}): "
+                                 f"ya estaba aplicada, no se aplica dos veces")
+                        return sesion.ultima_operacion[1]
+
+                    op = {"seq": self.estado.ultimo_seq + 1, "epoca": self.epoca,
+                          "lamport": self.reloj.tic(), "tipo": tipo, "id_sesion": id_sesion,
+                          "id_operacion": id_operacion, "datos": datos}
+                    actual.set_attribute("trucardo.seq", op["seq"])
+                    actual.set_attribute("trucardo.lamport", op["lamport"])
+
+                    self._aplicar(op)
+
+                    replicas = ""
+                    if self.__membresia is not None:
+                        respuestas = self.__membresia.replica.replicar(op)
+                        if self.rol != "primario":
+                            # replicando me entere de que ya no mando: no se confirma
+                            raise NoPrimario(None)
+                        al_dia = sum(1 for r in respuestas.values() if r.get("ok"))
+                        replicas = f" · la tienen {al_dia}/{len(respuestas)} de los que contestaron"
+
                     sesion = self.estado.sesion(id_sesion)
-                    log.info(f"reintento de {sesion.nombre} ({str(id_operacion)[:8]}): "
-                             f"ya estaba aplicada, no se aplica dos veces")
-                    return sesion.ultima_operacion[1]
-
-                op = {"seq": self.estado.ultimo_seq + 1, "epoca": self.epoca,
-                      "lamport": self.reloj.tic(), "tipo": tipo, "id_sesion": id_sesion,
-                      "id_operacion": id_operacion, "datos": datos}
-
-                self._aplicar(op)
-
-                replicas = ""
-                if self.__membresia is not None:
-                    respuestas = self.__membresia.replica.replicar(op)
-                    if self.rol != "primario":
-                        # replicando me entere de que ya no mando: no se confirma
-                        raise NoPrimario(None)
-                    al_dia = sum(1 for r in respuestas.values() if r.get("ok"))
-                    replicas = f" · la tienen {al_dia}/{len(respuestas)} de los que contestaron"
-
-                sesion = self.estado.sesion(id_sesion)
-                log.info(f"op {op['seq']} · {tipo} · {sesion.nombre} · "
-                         f"mesa {sesion.id_mesa}{replicas}")
-                return op["lamport"]
+                    log.info(f"op {op['seq']} · {tipo} · {sesion.nombre} · "
+                             f"mesa {sesion.id_mesa}{replicas}")
+                    return op["lamport"]
         finally:
             context.detach(token)
 
