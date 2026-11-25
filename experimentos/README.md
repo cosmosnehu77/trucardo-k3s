@@ -555,3 +555,184 @@ k get pods → trucardo-nodo2-…-q8pxl  maquina2  RESTARTS 0          ← el mi
 - **El cliente lo ve.** Para `bot-a`, el `falta_envido` estaba confirmado. Después de la partición, la mesa no lo tiene.
 - **El disco no lo evita.** La operación estaba guardada en el disco de N2, y se perdió igual. Para no perderla, el primario tendría que confirmarla sólo cuando la tiene la mayoría (quórum, como en Raft). Es el mismo límite del cerebro dividido del caso 7.
 - **Con `kill -STOP` no se reproduce.** Se probó colgar a los dos backups, hacer jugadas y después colgar al primario. Los backups recibieron igual las operaciones confirmadas sin acks: el kernel guarda los mensajes mientras el proceso está detenido y se los entrega al reanudarlo. La pérdida aparece sólo si los mensajes se pierden de verdad, como en una partición.
+
+---
+
+## Trazas
+
+Desde la #15, con `--telemetria`, cada nodo manda sus trazas a Jaeger (#11 a #14). Estos casos repiten experimentos anteriores mirando las trazas, y muestran lo que se ve ahí y no en los logs.
+
+**Preparación.** Cargá también la imagen de Jaeger y aplicá los manifiestos generados con `--telemetria` (ver el [README](../README.md#cluster-local-de-desarrollo-k3s-en-contenedores)). La interfaz queda en <http://172.30.0.11:30686>.
+
+Para que la traza empiece en el cliente, el cliente también tiene que exportar. Lo hace por el puerto OTLP de Jaeger, que Kubernetes asigna al azar:
+
+```bash
+OTLP=$(k get svc jaeger -o jsonpath='{.spec.ports[?(@.name=="otlp")].nodePort}')
+docker run --rm -it --network trucardo-k3s_maquinas -e TRUCARDO_NODOS="$VALOR" -e OTEL_EXPORTER_OTLP_ENDPOINT=http://172.30.0.11:$OTLP trucardo:local python -m cliente.cliente leo
+```
+
+**En Jaeger**, buscá por *Service* (`trucardo-nodo<id>` o `trucardo-cliente-<nombre>`) y *Operation*, por ejemplo `eleccion`. Para encontrar una operación puntual, *Tags* acepta los atributos, por ejemplo `trucardo.seq=1829`. Cada *span* muestra en *Process* el Pod y la máquina (`k8s.pod.name` y `k8s.node.name`).
+
+**Cómo leer la evidencia.** Los árboles salen de la API de Jaeger (`/api/v3/traces`), con un script de prueba fuera del repo, y se leen así:
+
+```
+10:03:28.054 jugada jugar     trucardo-nodo3   maquina1   18.6 ms  rol=primario epoca=13 seq=1349
+              └ sangría = hijo   └ servicio       └ k8s.node.name  └ duración   └ atributos trucardo.*
+```
+
+Los clientes automáticos abren el mismo *span* `jugada <qué>` que el cliente, con el servicio `trucardo-cliente-bot`.
+
+## 12. Una jugada replicada
+
+**Guion.** Jugá una carta y buscá en Jaeger la operación `jugada jugar` del cliente.
+
+**Qué se espera.** Un árbol con la jugada del cliente, la del primario y una réplica por cada backup.
+
+**Evidencia.**
+
+```
+10:03:28.054 jugada jugar           trucardo-cliente-bot -            20.3 ms
+10:03:28.054   jugada jugar           trucardo-nodo3       maquina1     18.6 ms  rol=primario epoca=13 seq=1349 lamport=2872
+10:03:28.066     replica                trucardo-nodo1       maquina2      5.7 ms  rol=backup epoca=13 seq=1349 lamport=2872
+10:03:28.066     replica                trucardo-nodo2       maquina3      5.6 ms  rol=backup epoca=13 seq=1349 lamport=2872
+```
+
+![Una jugada en Jaeger: el cliente, el primario y una réplica por backup](capturas/jugada.png)
+
+**Por qué.**
+
+- **Una sola traza cruza tres procesos en tres máquinas.** El contexto viaja del cliente al primario en una anotación de Pyro5 (#13). Del primario a los backups viaja en el mensaje `REPLICA` (#12).
+- **Hay una réplica por backup porque cada backup traza la suya** (#14). Un backup caído no aparecería en el árbol: el árbol muestra quién tiene la op.
+- **Los tres *spans* del cluster llevan el mismo `seq` y el mismo sello de Lamport.** Son la misma operación vista desde tres nodos.
+- **Lo que tarda una jugada se ve repartido.** Los primeros 12 ms son del primario: aplica la op y la escribe en disco con `fsync` (#22) antes de replicarla. Después, las dos réplicas corren en paralelo, unos 5 ms cada una.
+
+## 13. La elección tras matar al primario
+
+**Guion.** Borrá el Pod del primario, como en el caso 1. Para que además vuelva en otra máquina (caso 14), acordoná antes la suya:
+
+```bash
+k cordon maquina1
+```
+
+```bash
+k delete pod -l nodo=3
+```
+
+Al terminar, `k uncordon maquina1`. En Jaeger, buscá la operación `eleccion` de los backups.
+
+**Qué se espera.** Un árbol por candidatura: la elección, un desafío por cada nodo que contesta y, si gana, el coordinador con su aviso a cada nodo.
+
+**Evidencia.**
+
+```
+10:03:46 kubectl delete pod -l nodo=3        ← N3, primario de la época 13, en maquina1
+
+10:03:50.644 eleccion               trucardo-nodo1       maquina2      6.3 ms  rol=backup epoca=13 resultado=perdio
+10:03:50.649   desafio                trucardo-nodo2       maquina3      0.0 ms  rol=backup epoca=13 candidato=1 le_gano=True
+10:03:50.649   desafio                trucardo-nodo3       maquina3      0.1 ms  rol=backup epoca=3 candidato=1 le_gano=False
+
+10:03:51.981 eleccion               trucardo-nodo2       maquina3     22.6 ms  rol=backup epoca=13 resultado=gano
+10:03:51.983   desafio                trucardo-nodo3       maquina3      0.0 ms  rol=backup epoca=3 candidato=2 le_gano=False
+10:03:51.983   desafio                trucardo-nodo1       maquina2      0.0 ms  rol=backup epoca=13 candidato=2 le_gano=False
+10:03:51.994   coordinador            trucardo-nodo2       maquina3      9.5 ms  rol=primario epoca=14
+10:03:51.995     coordinador recibido   trucardo-nodo3       maquina3      4.3 ms  rol=backup epoca=14 primario=2 aceptado=True
+10:03:51.995     coordinador recibido   trucardo-nodo1       maquina2      7.7 ms  rol=backup epoca=14 primario=2 aceptado=True
+
+10:03:53 beto: tira 1 de basto (primario N2, 6.6 s)
+```
+
+![La elección de N2 en Jaeger: dos desafíos y el coordinador con sus dos avisos](capturas/eleccion.png)
+
+**Por qué.**
+
+- **Una elección se ve como un árbol de desafíos.** `ELECCION` y `COORDINADOR` llevan el contexto del *span* `eleccion`, así que lo que cada nodo hace al recibirlos queda colgado de él.
+- **Hubo dos candidaturas, y se ve por qué perdió la primera.** N1 convocó primero, porque su espera al azar fue más corta, y N2 le contestó `le_gano=True`: tienen la misma época y el mismo `ultimo_seq`, y desempata el id mayor. Un segundo después, N2 convocó y nadie le ganó.
+- **N3 ya estaba de vuelta y votó con la época 3.** Su Pod nuevo arrancó en 4 s en `maquina3`, con el log viejo que había dejado ahí en otro experimento. Con esas credenciales no le gana a nadie, pero contesta, así que la elección no espera a nadie (22,6 ms).
+- **La traza mide la elección, no la detección.** El *span* se abre después de la espera al azar. Los 3 s hasta declarar caído al primario y la espera no están en él. La jugada de `beto` sí los pagó: 6,6 s.
+
+## 14. Un nodo que cambia de máquina
+
+**Guion.** Es el mismo del caso 13. En Jaeger, buscá el servicio `trucardo-nodo3` y mirá `k8s.node.name` en los *spans* de antes y de después del borrado.
+
+**Qué se espera.** El mismo servicio, con otro Pod y en otra máquina.
+
+**Evidencia.** Los *spans* de `trucardo-nodo3` en esos minutos, agrupados por Pod:
+
+```
+09:59:01 → 10:03:45  trucardo-nodo3-5796ddb59d-sxvkg  maquina1  149 spans (eleccion, coordinador, desafio, jugada …, puesta al dia)
+10:03:50 → 10:04:37  trucardo-nodo3-5796ddb59d-lq54m  maquina3   86 spans (eleccion, desafio, coordinador recibido, puesta al dia recibida, replica)
+```
+
+Y la puesta al día de N3 en su máquina nueva:
+
+```
+10:03:52.109 puesta al dia          trucardo-nodo2       maquina3   3005.1 ms  rol=primario epoca=14 destino=3 desde=319 cantidad=1061
+10:03:52.114   puesta al dia recibida trucardo-nodo3       maquina3   4599.9 ms  rol=backup epoca=14 desde=319 cantidad=1061
+10:03:55 [N2│PRIMARIO│e=14] no pude ponerlo al dia a N3: no contesta
+10:03:56.736 puesta al dia          trucardo-nodo2       maquina3      1.2 ms  rol=primario epoca=14 destino=3 desde=1383 cantidad=1
+10:03:56 [N2│PRIMARIO│e=14] N3 quedo al dia en la op 1384
+```
+
+![La puesta al día de N3: el backup sigue trabajando después de que el primario dejó de esperarlo](capturas/puesta-al-dia.png)
+
+**Por qué.**
+
+- **Los atributos del Pod los pone Kubernetes** (#15). El servicio es el mismo, `trucardo-nodo3`, porque es el mismo nodo de Trucardo. El Pod y la máquina salen de la *Downward API*, y en Jaeger se ve dónde corrió cada *span*. Antes de mudarse, N3 era el primario: coordinador, jugadas y puestas al día. Después es un backup: desafíos, réplicas y puestas al día recibidas, además de la elección que convoca al arrancar sin primario.
+- **La traza muestra algo que el log no dice.** El log de N2 dice que N3 «no contesta». La traza muestra que sí contestaba: N3 siguió trabajando 1,6 s después de que N2 dejó de esperarlo. Tenía que escribir 1061 ops, cada una con su `fsync` (#22), y tardó 4,6 s. N2 espera una puesta al día hasta `TIMEOUT_CAIDO` (3 s).
+- **Igual converge.** N3 aplicó la puesta al día hasta la op 1380, y después las réplicas que llegaron mientras tanto (de la 1381 a la 1383). El latido siguiente lo vio una op atrás y le mandó sólo esa. El costo es una línea de log engañosa y una puesta al día más.
+
+## 15. Límite: el cerebro dividido en las trazas
+
+**Guion.** Repetí el caso 7 con Jaeger abierto. Aislá la máquina del primario, con una partida cuyos dos jugadores entran por esa máquina y otra que entra por otra. En la corrida, N2 (primario) y N3 estaban los dos en `maquina3`:
+
+```bash
+$C exec -T maquina3 sh -c 'for ip in 172.30.0.11 172.30.0.12; do iptables -I INPUT -s $ip -j DROP; iptables -I OUTPUT -d $ip -j DROP; done'
+```
+
+Después de unos 25 s, curá la partición con el mismo comando y `-D` en lugar de `-I`. En Jaeger, buscá las operaciones `jugada …` de cada nodo en ese intervalo.
+
+**Qué se espera.** Jugadas confirmadas por dos primarios de épocas distintas, con los mismos números de operación. Al curarse, el de la época vieja se baja y recorta.
+
+**Evidencia.** Las jugadas que cada primario confirmó, según sus *spans*, con los backups que tienen un `replica` hijo:
+
+```
+10:07:38  N2 (maquina3)  epoca=14  seq=1813  jugada jugar       replicas: nodo1, nodo3
+10:07:38 particion: maquina3 (N2 primario y N3) aislada
+10:07:43.344 eleccion    trucardo-nodo1  maquina2  2042.1 ms  rol=backup epoca=14 resultado=gano
+10:07:44.385   coordinador trucardo-nodo1  maquina2  1001.4 ms  rol=primario epoca=15
+10:07:47  N1 (maquina2)  epoca=15  seq=1814  jugada jugar       replicas: -
+…
+10:07:54  N2 (maquina3)  epoca=14  seq=1826  jugada jugar       replicas: nodo3
+10:07:56  N1 (maquina2)  epoca=15  seq=1822  jugada jugar       replicas: -
+10:07:57  N1 (maquina2)  epoca=15  seq=1823  jugada jugar       replicas: -
+10:07:57  N2 (maquina3)  epoca=14  seq=1829  jugada jugar       replicas: nodo3
+10:08:00  N1 (maquina2)  epoca=15  seq=1826  jugada responder   replicas: -
+10:08:00  N2 (maquina3)  epoca=14  seq=1831  jugada jugar       replicas: nodo3
+10:08:03 se cura
+10:08:03  N2 (maquina3)  epoca=14  seq=1834  jugada responder   replicas: nodo1, nodo3  (ERROR)
+10:08:04 [N2│PRIMARIO│e=14] replicando la op 1834 me entero de que hay epoca 15 y yo estoy en la 14: me bajo
+```
+
+La curación, en una sola traza:
+
+```
+10:08:04.307 jugada jugar           trucardo-cliente-bot -            21.3 ms
+10:08:04.308   jugada jugar           trucardo-nodo1       maquina2     19.7 ms  rol=primario epoca=15 seq=1829
+10:08:04.325     replica                trucardo-nodo3       maquina3      0.0 ms  rol=backup epoca=15 seq=1829 motivo=ATRASADO
+10:08:04.327     replica                trucardo-nodo2       maquina3      0.0 ms  rol=backup epoca=15 seq=1829 motivo=ATRASADO
+10:08:04.328     puesta al dia          trucardo-nodo1       maquina2    128.3 ms  rol=primario epoca=15 destino=2 desde=0 cantidad=1829
+10:08:04.340       puesta al dia recibida trucardo-nodo2       maquina3    115.4 ms  rol=backup epoca=15 desde=0 cantidad=1829
+10:08:04.328     puesta al dia          trucardo-nodo1       maquina2    127.5 ms  rol=primario epoca=15 destino=3 desde=0 cantidad=1829
+10:08:04.341       puesta al dia recibida trucardo-nodo3       maquina3    113.8 ms  rol=backup epoca=15 desde=0 cantidad=1829
+10:08:04 [N2│BACKUP│e=15] recorto el log de la op 1834 a la 1813: diverge del primario
+10:08:04 [N3│BACKUP│e=15] recorto el log de la op 1834 a la 1813: diverge del primario
+```
+
+![La curación en Jaeger: la jugada de N1, los dos ATRASADO y las dos puestas al día](capturas/curacion.png)
+
+**Por qué.**
+
+- **Dos primarios, y Jaeger los muestra juntos.** Entre 10:07:47 y 10:08:03, N1 (época 15) y N2 (época 14) confirman jugadas. Los mismos números de operación, de la 1826 a la 1829 por ejemplo, son ops distintas en cada lado. N2 sigue teniendo el ack de N3, que está en su misma máquina. N1 está solo y confirma sin réplicas («replicas: -»).
+- **Las demoras se ven en las duraciones.** Cada envío de N1 a todos espera 1 s, en paralelo, a los dos nodos que no contestan: 1 s para los desafíos y 1 s para el coordinador. Como el coordinador corre dentro de la elección, la elección suma 2 s. Mientras dura la partición, cada jugada de los dos primarios paga 1 s esperando el ack del otro lado.
+- **Toda la curación queda en una traza.** La primera jugada de N1 después de curarse recibe dos `ATRASADO`, y la puesta al día que lanza en otro hilo sigue siendo hija de esa jugada (#12). Manda desde la op 0 porque la punta de N2 es de una época que N1 no tiene (caso 9). N2 y N3 recortan las ops de la 1814 a la 1834, todas de la época 14. Las 20 primeras, N2 se las había confirmado a los clientes sin N1: es el límite del caso 11, ahora con nombre y número de operación. La 1834 quedó escrita en N2 y N3, pero no se confirmó: N1 la rechazó con `EPOCA_VIEJA`, N2 se bajó y su *span* terminó con error (`NoPrimario`). Por eso el *span* de esa jugada tiene un `replica` de N1, que no es un ack sino el rechazo.
+- **La partición también corta la telemetría.** De N2 faltan las jugadas de 10:07:39 a 10:07:53 (de la 1814 a la 1825): Jaeger corre en `maquina2`, del otro lado. El SDK junta los *spans* y los manda en lotes cada 5 s, desde un solo hilo. Cada envío espera hasta 10 s y, si no llega, descarta el lote. Los lotes de los primeros segundos vencieron durante el corte. Las jugadas desde las 10:07:54 seguían en la cola, o en un envío todavía en curso, cuando se curó la partición, y llegaron. Para no perderlas haría falta un *Collector* en cada máquina que guarde lo pendiente. Es una idea para la #28, no algo que esta fase necesite.
