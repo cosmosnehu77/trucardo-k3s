@@ -1,12 +1,16 @@
 import contextlib
 import contextvars
+import logging
 import os
 import threading
 
 from opentelemetry import propagate, trace
+from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.metrics import Observation
+from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+from opentelemetry.sdk._logs.export import BatchLogRecordProcessor, SimpleLogRecordProcessor
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
@@ -20,6 +24,8 @@ _INTERVALO_METRICAS_MS = 5000
 _proveedor = None
 _proveedor_metricas = None
 _instrumentos = None
+_proveedor_logs = None
+_manejador_logs = None
 _membresias = []
 
 # Pyro5 exige claves de 4 letras y valores bytes en annotations.
@@ -79,11 +85,11 @@ def _crear_instrumentos(meter):
     }
 
 
-def configurar(servicio, exportador=None, lector=None):
-    global _proveedor, _proveedor_metricas, _instrumentos
+def configurar(servicio, exportador=None, lector=None, exportador_logs=None):
+    global _proveedor, _proveedor_metricas, _instrumentos, _proveedor_logs, _manejador_logs
     cerrar()
     endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
-    if exportador is None and lector is None and not endpoint:
+    if exportador is None and lector is None and exportador_logs is None and not endpoint:
         return
     recurso = Resource.create({"service.name": servicio})
     if exportador is not None or endpoint:
@@ -102,6 +108,16 @@ def configurar(servicio, exportador=None, lector=None):
         )
         _proveedor_metricas = MeterProvider(resource=recurso, metric_readers=[origen])
         _instrumentos = _crear_instrumentos(_proveedor_metricas.get_meter(__name__))
+    if exportador_logs is not None or endpoint:
+        proveedor_logs = LoggerProvider(resource=recurso)
+        procesador = (
+            BatchLogRecordProcessor(OTLPLogExporter())
+            if exportador_logs is None
+            else SimpleLogRecordProcessor(exportador_logs)
+        )
+        proveedor_logs.add_log_record_processor(procesador)
+        _proveedor_logs = proveedor_logs
+        _manejador_logs = LoggingHandler(logger_provider=proveedor_logs)
 
 
 def tracer():
@@ -110,13 +126,23 @@ def tracer():
     return _proveedor.get_tracer(__name__)
 
 
+def manejador_de_logs():
+    return _manejador_logs
+
+
 def cerrar():
-    global _proveedor, _proveedor_metricas, _instrumentos
+    global _proveedor, _proveedor_metricas, _instrumentos, _proveedor_logs, _manejador_logs
     if _proveedor is not None:
         proveedor, _proveedor = _proveedor, None
         proveedor.shutdown()
     if _proveedor_metricas is not None:
         proveedor, _proveedor_metricas, _instrumentos = _proveedor_metricas, None, None
+        proveedor.shutdown()
+    if _manejador_logs is not None:
+        manejador, _manejador_logs = _manejador_logs, None
+        logging.getLogger("trucardo").removeHandler(manejador)
+    if _proveedor_logs is not None:
+        proveedor, _proveedor_logs = _proveedor_logs, None
         proveedor.shutdown()
     _membresias.clear()
 

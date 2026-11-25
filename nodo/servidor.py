@@ -316,8 +316,8 @@ def main():
     except ValueError as error:
         sys.exit(f"configuracion invalida: {error}")
     yo = cluster[id_nodo]
-    registro.configurar(servidor)
     telemetria.configurar(f"trucardo-nodo{id_nodo}")
+    registro.configurar(servidor)
 
     membresia = Membresia(servidor, cluster)
     servidor._set_membresia(membresia)
