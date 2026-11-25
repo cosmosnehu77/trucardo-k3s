@@ -102,7 +102,7 @@ class Replicador:
                 nodo.reloj.recibir(respuesta.get("lamport", 0))
                 with nodo.lock:
                     if id_nodo in self.m.vivos:
-                        self.m.vivos[id_nodo] = respuesta.get("ultimo_seq", 0)
+                        self.m.anotar_seq(id_nodo, respuesta.get("ultimo_seq", 0))
                 if respuesta.get("ok"):
                     log.info(f"N{id_nodo} quedo al dia en la op {respuesta.get('ultimo_seq')}")
                 else:

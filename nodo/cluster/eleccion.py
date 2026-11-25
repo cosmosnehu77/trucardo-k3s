@@ -45,6 +45,7 @@ class Eleccion:
 
             with telemetria.span("eleccion", nodo, ultimo_seq=ultimo_seq,
                                  epoca_ultima=epoca_ultima) as actual:
+                inicio = time.monotonic()
                 pedido = self.m.mensaje(ELECCION, ultimo_seq=ultimo_seq,
                                         epoca_ultima=epoca_ultima)
                 log.info(f"arranco una eleccion (epoca_ultima {epoca_ultima}, ultimo_seq {ultimo_seq})")
@@ -52,6 +53,7 @@ class Eleccion:
                 respuestas = self.m.preguntar_a_todos(pedido)
                 if any(r.get("mando_yo") for r in respuestas.values()):
                     actual.set_attribute("trucardo.resultado", "perdio")
+                    telemetria.eleccion(nodo, time.monotonic() - inicio, "perdio")
                     log.info("me gana otro candidato: espero su COORDINADOR")
                     return
 
@@ -59,6 +61,7 @@ class Eleccion:
                          f"{len(self.m.cluster) - 1}): me corono")
                 self._coronarme(respuestas)
                 actual.set_attribute("trucardo.resultado", "gano")
+                telemetria.eleccion(nodo, time.monotonic() - inicio, "gano")
         finally:
             with nodo.lock:
                 self._convocando = False

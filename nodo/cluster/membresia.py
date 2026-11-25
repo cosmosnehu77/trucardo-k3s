@@ -24,6 +24,7 @@ class Membresia:
         self.timeout_eleccion = timeout_eleccion
 
         self.vivos = {}                          # del primario: id -> ultimo_seq
+        self.visto = {}                          # ultimo_seq conocido de cada nodo; no se borra al caer
         self.ultimo_latido = time.monotonic()    # monotonic: la hora de pared puede saltar
         self.eleccion_desde = None               # desde cuando hay una eleccion en curso
 
@@ -49,6 +50,7 @@ class Membresia:
         yo = self.cluster[self.nodo.id_nodo]
         self._escucha = transporte.Escucha(yo.puerto_cluster, self.despachar)
         self.latido.arrancar_hilos()
+        telemetria.observar(self)
 
     def detener(self):
         self.detenido.set()
@@ -114,12 +116,17 @@ class Membresia:
         with candado:
             return dict(respuestas)
 
+    def anotar_seq(self, id_nodo, seq):
+        self.vivos[id_nodo] = seq
+        self.visto[id_nodo] = seq
+
     def coronarme(self, epoca, vivos):
         self.nodo.epoca = epoca
         self.nodo.rol = "primario"
         self.nodo.primario = self.nodo.id_nodo
         self.eleccion_desde = None
         self.vivos = dict(vivos)
+        self.visto.update(vivos)
 
     def sin_primario(self):
         self.nodo.primario = None
