@@ -75,6 +75,7 @@ class Membresia:
         #La forma que tienen todas las respuestas del cluster
         return {"ok": motivo in AL_DIA, "motivo": motivo,
                 "ultimo_seq": self.nodo.estado.ultimo_seq,
+                "epoca_ultima": self.nodo.estado.epoca_ultima,
                 "epoca": self.nodo.epoca, **extra}
 
     def direccion(self, id_nodo):

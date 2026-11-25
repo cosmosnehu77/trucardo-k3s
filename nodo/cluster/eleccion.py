@@ -38,11 +38,13 @@ class Eleccion:
         try:
             time.sleep(random.uniform(*self.m.jitter))
             with nodo.lock:
-                if self.m.eleccion_desde is None:
+                if self.m.detenido.is_set() or self.m.eleccion_desde is None:
                     return
+                epoca_ultima = nodo.estado.epoca_ultima
                 ultimo_seq = nodo.estado.ultimo_seq
-                pedido = self.m.mensaje(ELECCION, ultimo_seq=ultimo_seq)
-            log.info(f"arranco una eleccion (ultimo_seq {ultimo_seq})")
+                pedido = self.m.mensaje(ELECCION, ultimo_seq=ultimo_seq,
+                                        epoca_ultima=epoca_ultima)
+            log.info(f"arranco una eleccion (epoca_ultima {epoca_ultima}, ultimo_seq {ultimo_seq})")
 
             respuestas = self.m.preguntar_a_todos(pedido)
             if any(r.get("mando_yo") for r in respuestas.values()):
@@ -59,6 +61,8 @@ class Eleccion:
     def _coronarme(self, respuestas):
         nodo = self.m.nodo
         with nodo.lock:
+            if self.m.detenido.is_set():
+                return
             vistas = [nodo.epoca] + [r.get("epoca", 0) for r in respuestas.values()]
             self.m.coronarme(max(vistas) + 1,
                              {i: r.get("ultimo_seq", 0) for i, r in respuestas.items()})
@@ -68,12 +72,16 @@ class Eleccion:
         self.m.preguntar_a_todos(aviso)
 
     def _credenciales(self):
-        return (self.m.nodo.epoca, self.m.nodo.estado.ultimo_seq, self.m.nodo.id_nodo)
+        return (self.m.nodo.estado.epoca_ultima,
+                self.m.nodo.estado.ultimo_seq,
+                self.m.nodo.id_nodo)
 
     # ---------- contestarle a los demas ----------
 
     def _al_eleccion(self, mensaje):
-        suyas = (mensaje.get("epoca", 0), mensaje.get("ultimo_seq", 0), mensaje["origen"])
+        suyas = (mensaje.get("epoca_ultima", 0),
+                 mensaje.get("ultimo_seq", 0),
+                 mensaje["origen"])
 
         with self.m.nodo.lock:
             mias = self._credenciales()

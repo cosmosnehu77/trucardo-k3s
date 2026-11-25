@@ -36,13 +36,20 @@ class Disco:
         except FileNotFoundError:
             return []
 
-    def guardar_epoca(self, epoca):
-        temporal = self._ruta_epoca + ".tmp"
+    def _reemplazar(self, ruta, contenido):
+        temporal = ruta + ".tmp"
         with open(temporal, "w", encoding="utf-8") as archivo:
-            archivo.write(f"{epoca}\n")
+            archivo.write(contenido)
             archivo.flush()
             os.fsync(archivo.fileno())
-        os.replace(temporal, self._ruta_epoca)
+        os.replace(temporal, ruta)
+
+    def reescribir(self, ops):
+        contenido = "".join(json.dumps(op) + "\n" for op in ops)
+        self._reemplazar(self._ruta_ops, contenido)
+
+    def guardar_epoca(self, epoca):
+        self._reemplazar(self._ruta_epoca, f"{epoca}\n")
 
     def epoca(self):
         try:

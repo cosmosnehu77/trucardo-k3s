@@ -25,10 +25,21 @@ class Replicador:
 
     # ---------- del lado del primario ----------
 
+    def punto_en_comun(self, su_seq, su_epoca):
+        # Solo conozco su ultima op: la coincidencia de logs de Raft garantiza el prefijo
+        # solo cuando esa op coincide; si no, recorta todo para reenviar desde cero.
+        log_mio = self.m.nodo.estado.log
+        if su_seq <= len(log_mio) and (su_seq == 0 or log_mio[su_seq - 1]["epoca"] == su_epoca):
+            return su_seq
+        return 0
+
     def replicar(self, operacion):
         #Manda la op a todos y devuelve {id: respuesta} de los que contestaron.
         nodo = self.m.nodo
-        pedido = self.m.mensaje(REPLICA, op=operacion, ultimo_seq=nodo.estado.ultimo_seq)
+        seq = operacion["seq"]
+        previa = nodo.estado.log[seq - 2]["epoca"] if seq > 1 else 0
+        pedido = self.m.mensaje(REPLICA, op=operacion, previa=previa,
+                                ultimo_seq=nodo.estado.ultimo_seq)
         respuestas = self.m.preguntar_a_todos(pedido)
 
         epocas = [r.get("epoca", 0) for r in respuestas.values()
@@ -43,38 +54,44 @@ class Replicador:
         for id_nodo, respuesta in respuestas.items():
             motivo = respuesta.get("motivo")
             if motivo == ATRASADO:
-                self.poner_al_dia_aparte(id_nodo, respuesta.get("ultimo_seq", 0))
+                self.poner_al_dia_aparte(id_nodo, respuesta.get("ultimo_seq", 0),
+                                         respuesta.get("epoca_ultima", 0))
             elif motivo == ILEGAL:
                 log.error(f"N{id_nodo} rechaza la op {operacion['seq']} por ilegal: "
                           f"los estados divergieron y la puesta al dia no lo arregla")
         return respuestas
 
-    def poner_al_dia_aparte(self, id_nodo, su_seq):
+    def poner_al_dia_aparte(self, id_nodo, su_seq, su_epoca):
         #Larga la puesta al dia en un hilo, una sola a la vez por nodo.
 
         with self.m.nodo.lock:
             if id_nodo in self._poniendo_al_dia:
                 return
             self._poniendo_al_dia.add(id_nodo)
-        threading.Thread(target=self._poner_al_dia, args=(id_nodo, su_seq),
+        threading.Thread(target=self._poner_al_dia, args=(id_nodo, su_seq, su_epoca),
                          daemon=True).start()
 
-    def _poner_al_dia(self, id_nodo, su_seq):
+    def _poner_al_dia(self, id_nodo, su_seq, su_epoca):
         #Le manda a N{id_nodo} las ops que le faltan, todas en un mensaje.
         nodo = self.m.nodo
         try:
             with nodo.lock:
                 if nodo.rol != "primario":
                     return
+                desde = self.punto_en_comun(su_seq, su_epoca)
                 # log[i] es la op con seq i + 1: las que le faltan son estas.
-                faltantes = nodo.estado.log[su_seq:]
-                if not faltantes:
+                faltantes = nodo.estado.log[desde:]
+                if desde == su_seq and not faltantes:
                     return
-                pedido = self.m.mensaje(PUESTA_AL_DIA, ops=faltantes)
+                pedido = self.m.mensaje(PUESTA_AL_DIA, desde=desde, ops=faltantes)
                 mi_seq = nodo.estado.ultimo_seq
 
-            log.info(f"N{id_nodo} esta en la op {su_seq} y yo en la {mi_seq}: "
-                     f"le mando las {len(faltantes)} que le faltan")
+            if desde < su_seq:
+                log.info(f"N{id_nodo} diverge desde la op {desde + 1}: "
+                         f"recorta a la {desde} y le mando {len(faltantes)}")
+            else:
+                log.info(f"N{id_nodo} esta en la op {su_seq} y yo en la {mi_seq}: "
+                         f"le mando las {len(faltantes)} que le faltan")
             try:
                 respuesta = transporte.enviar(self.m.direccion(id_nodo), pedido,
                                               timeout=self.m.timeout)
@@ -105,7 +122,8 @@ class Replicador:
             if self.m.lo_rechazo(origen, epoca):
                 return self.m.respuesta(EPOCA_VIEJA)
             self.m.adoptar_primario(origen, epoca)
-            return self.m.respuesta(self.m.nodo._atiendo_replica(mensaje.get("op")))
+            return self.m.respuesta(
+                self.m.nodo._atiendo_replica(mensaje.get("op"), mensaje.get("previa")))
 
     def _a_la_puesta_al_dia(self, mensaje):
         origen, epoca = mensaje["origen"], mensaje.get("epoca", 0)
@@ -115,4 +133,5 @@ class Replicador:
                 return self.m.respuesta(EPOCA_VIEJA)
             self.m.adoptar_primario(origen, epoca)
             return self.m.respuesta(
-                self.m.nodo._atiendo_puesta_al_dia(mensaje.get("ops") or []))
+                self.m.nodo._atiendo_puesta_al_dia(
+                    mensaje.get("ops") or [], mensaje["desde"], epoca))
