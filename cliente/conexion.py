@@ -2,9 +2,10 @@ import itertools
 import time
 
 import Pyro5.api
+import Pyro5.callcontext
 import Pyro5.errors
 
-from nodo import config
+from nodo import config, telemetria
 from nodo.errores import NoPrimario
 
 NOMBRE_OBJETO = "truco"
@@ -19,11 +20,16 @@ class SinServicio(Exception):
     pass
 
 
+def _invocar(proxy, metodo, *args):
+    Pyro5.callcontext.current_context.annotations = telemetria.anotaciones()
+    return getattr(proxy, metodo)(*args)
+
+
 def preguntar(nodo, metodo, *args):
     try:
         with Pyro5.api.Proxy(f"PYRO:{NOMBRE_OBJETO}@{nodo.host}:{nodo.puerto_pyro}") as proxy:
             proxy._pyroTimeout = config.TIMEOUT_RPC
-            return getattr(proxy, metodo)(*args)
+            return _invocar(proxy, metodo, *args)
     except (Pyro5.errors.PyroError, OSError):
         return None
 
@@ -45,7 +51,7 @@ class Conexion:
         while True:
             id_nodo = self.primario if self.primario is not None else next(self._orden)
             try:
-                respuesta = getattr(self._proxy_a(id_nodo), metodo)(*args, self.reloj.tic())
+                respuesta = _invocar(self._proxy_a(id_nodo), metodo, *args, self.reloj.tic())
             except NoPrimario as error:
                 conocido = error.primario if error.primario in self.nodos else None
                 # Una redireccion se prueba ya, pero no dos seguidas: en plena

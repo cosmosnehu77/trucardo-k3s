@@ -1,8 +1,14 @@
 from opentelemetry import trace
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+from cliente.cliente import Cliente
+from cliente.conexion import Conexion
 from nodo import telemetria, transporte
+from nodo.lamport import Reloj
+from nodo.servidor import NOMBRE_OBJETO
+from tests.test_conexion import _nodo_pyro
 from tests.test_membresia import _apagar, _cluster
+from tests.test_servidor import _id
 
 
 def _registrar_prueba(membresia):
@@ -13,20 +19,36 @@ def _registrar_prueba(membresia):
     membresia._manejadores["PRUEBA"] = al_prueba
 
 
-def _verificar_hijo(exportador):
+def _verificar_hijo(exportador, padre="emisor", hijo="receptor"):
     spans = {span.name: span for span in exportador.get_finished_spans()}
-    emisor = spans["emisor"]
-    receptor = spans["receptor"]
+    emisor = spans[padre]
+    receptor = spans[hijo]
     assert receptor.context.trace_id == emisor.context.trace_id
     assert receptor.parent is not None
     assert receptor.parent.span_id == emisor.context.span_id
+
+
+def _envolver_aplicar(servidor):
+    aplicar_original = servidor._aplicar
+
+    def aplicar_con_span(op):
+        with telemetria.tracer().start_as_current_span("aplicar"):
+            return aplicar_original(op)
+
+    servidor._aplicar = aplicar_con_span
+
+
+def _primario_pyro():
+    daemon, nodo = _nodo_pyro(1, primario=1)
+    _envolver_aplicar(daemon.objectsById[NOMBRE_OBJETO])
+    return daemon, nodo
 
 
 def test_contexto_se_propaga_entre_nodos():
     exportador = InMemorySpanExporter()
     _, membresias = _cluster()
     try:
-        telemetria.configurar(1, exportador)
+        telemetria.configurar("trucardo-nodo1", exportador)
         _registrar_prueba(membresias[2])
 
         with telemetria.tracer().start_as_current_span("emisor"):
@@ -48,7 +70,7 @@ def test_contexto_se_propaga_entre_nodos_desde_otro_hilo():
     exportador = InMemorySpanExporter()
     _, membresias = _cluster()
     try:
-        telemetria.configurar(1, exportador)
+        telemetria.configurar("trucardo-nodo1", exportador)
         _registrar_prueba(membresias[2])
         respuestas = []
 
@@ -77,7 +99,7 @@ def test_sin_span_emisor_el_receptor_no_tiene_padre():
     exportador = InMemorySpanExporter()
     _, membresias = _cluster()
     try:
-        telemetria.configurar(1, exportador)
+        telemetria.configurar("trucardo-nodo1", exportador)
         _registrar_prueba(membresias[2])
 
         respuesta = transporte.enviar(
@@ -100,7 +122,7 @@ def test_sin_span_emisor_el_receptor_no_tiene_padre():
 def test_hilo_propaga_contexto_es_daemon_y_no_arranca_solo():
     exportador = InMemorySpanExporter()
     try:
-        telemetria.configurar(1, exportador)
+        telemetria.configurar("trucardo-nodo1", exportador)
         visto = []
 
         def correr(valor):
@@ -119,3 +141,81 @@ def test_hilo_propaga_contexto_es_daemon_y_no_arranca_solo():
         assert visto == [("ok", esperado)]
     finally:
         telemetria.cerrar()
+
+
+def test_anotaciones_transporta_y_reconstruye_el_contexto():
+    exportador = InMemorySpanExporter()
+    try:
+        telemetria.configurar("trucardo-cliente-ana", exportador)
+        assert telemetria.anotaciones() == {}
+        assert not trace.get_current_span(telemetria.de_anotaciones({})).get_span_context().is_valid
+
+        with telemetria.tracer().start_as_current_span("jugada") as jugada:
+            anot = telemetria.anotaciones()
+            esperado = jugada.get_span_context()
+
+        assert set(anot) == {"TRCP"}
+        assert isinstance(anot["TRCP"], bytes)
+        reconstruido = trace.get_current_span(telemetria.de_anotaciones(anot)).get_span_context()
+        assert reconstruido.trace_id == esperado.trace_id
+        assert reconstruido.span_id == esperado.span_id
+    finally:
+        telemetria.cerrar()
+
+
+def test_contexto_se_propaga_del_cliente_al_servidor():
+    exportador = InMemorySpanExporter()
+    daemon, nodo = _primario_pyro()
+    conexion = Conexion({1: nodo}, Reloj())
+    try:
+        telemetria.configurar("trucardo-nodo1", exportador)
+        with telemetria.tracer().start_as_current_span("jugada"):
+            creada = conexion.llamar("crear_partida", "ana", _id())
+
+        assert "id_partida" in creada
+        telemetria.cerrar()
+        _verificar_hijo(exportador, "jugada", "aplicar")
+    finally:
+        conexion._soltar()
+        telemetria.cerrar()
+        daemon.shutdown()
+
+
+def test_sin_span_en_el_cliente_el_servidor_no_tiene_padre():
+    exportador = InMemorySpanExporter()
+    daemon, nodo = _primario_pyro()
+    conexion = Conexion({1: nodo}, Reloj())
+    try:
+        telemetria.configurar("trucardo-nodo1", exportador)
+        creada = conexion.llamar("crear_partida", "ana", _id())
+
+        assert "id_partida" in creada
+        telemetria.cerrar()
+        spans = exportador.get_finished_spans()
+        assert len(spans) == 1
+        assert spans[0].name == "aplicar"
+        assert spans[0].parent is None
+    finally:
+        conexion._soltar()
+        telemetria.cerrar()
+        daemon.shutdown()
+
+
+def test_enviar_del_cliente_abre_el_span_raiz_de_la_jugada():
+    exportador = InMemorySpanExporter()
+    daemon, nodo = _primario_pyro()
+    cliente = Cliente({1: nodo})
+    try:
+        creada = cliente._llamar("crear_partida", "ana", _id())
+        unida = cliente._llamar("unirse", creada["id_partida"], "beto", _id())
+        vista = cliente._llamar("ver", creada["id_sesion"])
+        cliente.id_sesion = creada["id_sesion"] if vista["es_mi_turno"] else unida["id_sesion"]
+
+        telemetria.configurar("trucardo-cliente-ana", exportador)
+        cliente._enviar("mazo", None)
+        telemetria.cerrar()
+        _verificar_hijo(exportador, "jugada mazo", "aplicar")
+    finally:
+        cliente.conexion._soltar()
+        telemetria.cerrar()
+        daemon.shutdown()
