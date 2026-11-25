@@ -88,9 +88,10 @@ class Eleccion:
             le_gano = mias > suyas
             if not le_gano:
                 self.m.eleccion_desde = time.monotonic()
+            convocar = le_gano and not self.m.primario_vivo()
             respuesta = self.m.respuesta(mando_yo=le_gano)
 
-        if le_gano:
+        if convocar:
             self.convocar_aparte()
         return respuesta
 

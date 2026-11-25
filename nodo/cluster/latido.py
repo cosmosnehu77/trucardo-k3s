@@ -88,7 +88,7 @@ class Latido:
         nodo = self.m.nodo
         while not self.m.detenido.wait(self.m.intervalo_latido / 2):
             with nodo.lock:
-                if nodo.rol != "backup":
+                if self.m.primario_vivo():
                     continue
 
                 if nodo.primario is None:
@@ -105,8 +105,6 @@ class Latido:
 
                 else:
                     silencio = time.monotonic() - self.m.ultimo_latido
-                    if silencio < self.m.timeout:
-                        continue
                     log.info(f"{silencio:.1f} s sin latido de N{nodo.primario}: "
                              f"lo doy por caido")
                     self.m.sin_primario()

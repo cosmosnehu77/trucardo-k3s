@@ -481,3 +481,81 @@ def test_dos_nodos_en_epocas_distintas_eligen_un_solo_primario():
             "tiene que quedar un solo primario reconocido por los dos"
     finally:
         _apagar(membresias)
+
+
+# ---------- eleccion tardia con primario vivo ----------
+
+
+def _pedido_eleccion(cluster, id_nodo=1):
+    return _membresia(cluster, id_nodo).mensaje(ELECCION, ultimo_seq=0, epoca_ultima=0)
+
+
+def test_eleccion_tardia_no_convoca_si_el_primario_esta_vivo():
+    cluster = {i: Nodo(i, "127.0.0.1", 0, _puerto_libre()) for i in (1, 2, 3)}
+    backup = _membresia(cluster, 2)
+    backup.adoptar_primario(3, epoca=1)
+    convocatorias = []
+    backup.eleccion.convocar_aparte = _registrando(lambda: None, convocatorias)
+
+    respuesta = backup.eleccion._al_eleccion(_pedido_eleccion(cluster))
+
+    assert respuesta["mando_yo"] is True
+    assert convocatorias == [], "sigue a un primario vivo: no tiene que convocar"
+
+
+def test_eleccion_tardia_no_convoca_si_ya_es_primario():
+    cluster = {i: Nodo(i, "127.0.0.1", 0, _puerto_libre()) for i in (1, 2)}
+    primario = _membresia(cluster, 2)
+    primario.coronarme(epoca=1, vivos={1: 0})
+    convocatorias = []
+    primario.eleccion.convocar_aparte = _registrando(lambda: None, convocatorias)
+
+    respuesta = primario.eleccion._al_eleccion(_pedido_eleccion(cluster))
+
+    assert respuesta["mando_yo"] is True
+    assert convocatorias == [], "ya es primario: no tiene que convocar"
+
+
+def test_eleccion_convoca_si_no_hay_primario_vivo():
+    cluster = {i: Nodo(i, "127.0.0.1", 0, _puerto_libre()) for i in (1, 2, 3)}
+    pedido = _pedido_eleccion(cluster)
+
+    sin_primario = _membresia(cluster, 2)
+    sin_primario.adoptar_primario(3, epoca=1)
+    sin_primario.sin_primario()
+    convocatorias = []
+    sin_primario.eleccion.convocar_aparte = _registrando(lambda: None, convocatorias)
+    respuesta = sin_primario.eleccion._al_eleccion(pedido)
+    assert respuesta["mando_yo"] is True
+    assert len(convocatorias) == 1, "sin primario conocido si tiene que convocar"
+
+    vencido = _membresia(cluster, 2)
+    vencido.adoptar_primario(3, epoca=1)
+    vencido.ultimo_latido = time.monotonic() - TIMEOUT - 1
+    convocatorias = []
+    vencido.eleccion.convocar_aparte = _registrando(lambda: None, convocatorias)
+    respuesta = vencido.eleccion._al_eleccion(pedido)
+    assert respuesta["mando_yo"] is True
+    assert len(convocatorias) == 1, "con el primario vencido si tiene que convocar"
+
+
+def test_eleccion_tardia_no_cambia_la_epoca_con_primario_vivo():
+    cluster, membresias = _cluster()
+    try:
+        assert _esperar(lambda: _armado(membresias, 3)
+                        and all(not m.eleccion.convocando for m in membresias.values()))
+        epoca = membresias[3].nodo.epoca
+
+        respuesta = transporte.enviar(
+            ("127.0.0.1", cluster[2].puerto_cluster),
+            membresias[1].mensaje(ELECCION, ultimo_seq=0, epoca_ultima=0),
+            timeout=1.0,
+        )
+        assert respuesta["mando_yo"] is True
+        assert not _esperar(
+            lambda: any(m.nodo.epoca != epoca for m in membresias.values()),
+            limite=TIMEOUT,
+        ), "una ELECCION tardia no puede subir la epoca si el primario esta vivo"
+        assert _armado(membresias, 3)
+    finally:
+        _apagar(membresias)

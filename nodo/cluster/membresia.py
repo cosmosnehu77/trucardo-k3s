@@ -138,6 +138,11 @@ class Membresia:
         self.ultimo_latido = time.monotonic()
         self.eleccion_desde = None
 
+    def primario_vivo(self):
+        return self.nodo.rol == "primario" or (
+            self.nodo.primario is not None and
+            time.monotonic() - self.ultimo_latido < self.timeout)
+
     # ---------- a quien le reconozco el mando ----------
 
     def _le_cedo(self, origen, epoca):
