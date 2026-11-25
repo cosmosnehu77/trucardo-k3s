@@ -12,7 +12,7 @@ Además:
 - **Fases extra:** observabilidad con **OpenTelemetry** (trazas en Jaeger, métricas y logs en Grafana) y almacenamiento replicado con **Longhorn**, para que el nodo se mude de máquina con su disco.
 
 > [!NOTE]
-> **Estado:** en construcción. Hoy el repositorio ya tiene el generador de manifiestos, el cluster local de desarrollo y la guía para tres máquinas reales sobre la base del Proyecto 1 (tag `proyecto1-base`). El despliegue en k3s se construye issue por issue; ver la tabla de estado al final de [PLAN.md](PLAN.md).
+> **Estado:** en construcción. Hoy el repositorio ya tiene el generador de manifiestos, el cluster local de desarrollo, la guía para tres máquinas reales, el log de cada nodo en disco y los [experimentos de falla](experimentos/README.md), sobre la base del Proyecto 1 (tag `proyecto1-base`). El despliegue en k3s se construye issue por issue; ver la tabla de estado al final de [PLAN.md](PLAN.md).
 
 ## Documentos
 

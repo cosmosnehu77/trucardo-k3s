@@ -739,6 +739,57 @@ Cuando lo que se agrega es una fase entera, sus issues van en su fase y acá que
 - **Criterios de aceptación:** la suite pasa 20 veces seguidas con las 12 CPU ocupadas.
 - **Tests:** los propios tests corregidos, más la verificación de las 20 corridas en el registro.
 
+### #52 Los nodos se encuentran sin depender del DNS del cluster
+- **Requisitos:** RF-02, RF-12
+- **Tipo:** código
+- **Depende de:** #10
+- **Problema:** los nodos se buscan por el nombre del Service (`nodo1`, D5), y eso pasa por CoreDNS. En k3s, CoreDNS es **una sola réplica** y en el cluster local queda en `maquina1`, el servidor. En el experimento 6 de la #10, al apagar `maquina1`:
+  - los Pods de las otras máquinas siguen corriendo y `kube-proxy` sigue ruteando, pero `nodo1`, `nodo2` y `nodo3` dejan de resolver (`Temporary failure in name resolution`, 20 s por intento);
+  - N1 y N2 no se encuentran, cada uno «gana» su elección («contestaron 0 de 2») y quedan **dos primarios de la época 6**;
+  - cada operación tarda 7,5 a 15 s, porque el primario se traba resolviendo nombres para replicar.
+
+  Es decir, apagar el plano de control produce el mismo cerebro dividido que una partición de red, aunque la red ande.
+- **Qué hacer:**
+  - que cada Service tenga una `clusterIP` **fija**, calculada por una sola función a partir del id del nodo, dentro del rango de Services de k3s (`10.43.0.0/16`);
+  - que cada Pod tenga `hostAliases` con esos nombres y esas IPs, así `nodo1` resuelve por `/etc/hosts`, sin CoreDNS. `TRUCARDO_NODOS` no cambia (D5 se mantiene);
+  - documentar en el README la suposición sobre el rango de Services.
+- **Criterios de aceptación:** al repetir el experimento 6 de la #10 queda **un solo** primario, y la partida sigue con los tiempos normales mientras `maquina1` está apagada.
+- **Tests** (en `tests/test_manifiestos.py`):
+  - cada Service tiene una `clusterIP` distinta, dentro del rango;
+  - los `hostAliases` de cada Pod tienen todos los nodos, con la misma IP que su Service;
+  - el valor de `TRUCARDO_NODOS` sigue siendo idéntico al de entrada.
+
+### #53 Una elección tardía dispara otra aunque ya haya primario
+- **Requisitos:** RF-08, RNF-01
+- **Tipo:** código
+- **Depende de:** #23
+- **Problema:** una `ELECCION` que llega tarde dispara otra elección, aunque ya haya primario. En `Eleccion._al_eleccion`, quien tiene mejores credenciales contesta «mando yo» y **siempre** convoca su propia elección, sin mirar si ya conoce a un primario vivo. Pasa así:
+  1. los tres nodos arrancan sin primario y convocan, cada uno después de su espera al azar (`JITTER`);
+  2. N3 se corona y N2 lo adopta;
+  3. la espera de N1 termina recién ahora, y N1 manda su `ELECCION`;
+  4. N2 le gana a N1, le contesta «mando yo» y convoca otra elección.
+
+  Con N3 vivo, se paga una elección de más y una época de más. Si en ese momento N3 se cae, N2 se corona sin que nadie haya detectado el silencio.
+- **Cómo se vio:** verificando la #10. `test_si_el_primario_deja_de_latir_los_backups_lo_detectan` falló 2 veces en 12 corridas de la suite con las CPU ocupadas, y 1 en 60 corridas aisladas, con el log de la corrida que falló:
+
+  ```
+  15917 (convocar) gano la eleccion: soy el primario de la epoca 1     ← N3
+  15918 (convocar) arranco una eleccion (epoca_ultima 0, ultimo_seq 0)  ← N1, tarde
+  15923 (_atender) N3 es el primario de la epoca 1
+  15952 (convocar) arranco una eleccion (epoca_ultima 0, ultimo_seq 0)  ← N2, sin detectar nada
+  15954 (convocar) nadie me gana (contestaron 1 de 2): me corono        ← N3 ya estaba detenido por el test
+  ```
+
+  El test espera que los backups dejen de seguir a N3 **porque** detectaron el silencio, y acá dejaron de seguirlo por la elección de más.
+- **Qué hacer:**
+  - primero, un test determinístico: un nodo que ya sigue a un primario vivo recibe una `ELECCION` de un nodo con peores credenciales, y no tiene que convocar;
+  - después, que `_al_eleccion` no convoque si el nodo es primario o si sigue a un primario que late. Sigue contestando «mando yo», y el candidato se entera del primario por el próximo latido;
+  - revisar que el candidato que esperaba un `COORDINADOR` no quede colgado: hoy reintenta al vencer `TIMEOUT_ELECCION`, y el latido del primario tiene que llegarle antes.
+- **Criterios de aceptación:**
+  - con un primario vivo, una `ELECCION` tardía no cambia la época;
+  - la suite pasa 20 veces seguidas con las CPU ocupadas.
+- **Tests:** el determinístico de arriba, que tiene que fallar antes del cambio, más la verificación de las 20 corridas en el registro.
+
 ---
 
 ## 11. Calendario sugerido
@@ -765,11 +816,13 @@ Cuando lo que se agrega es una fase entera, sus issues van en su fase y acá que
 | #7 | Tolerancia a fallas de infraestructura | ✅ |
 | #8 | Cluster local de desarrollo | ✅ |
 | #9 | Despliegue en máquinas reales | ✅ |
-| #10 | Experimentos de falla en k3s | ⏳ |
+| #10 | Experimentos de falla en k3s | ✅ |
 | #22 | Log de operaciones en disco (recomendada) | ✅ |
 | #23 | Recuperación consistente desde el disco (recomendada) | ✅ |
 | #24 | Un volumen por nodo en compose y k3s (recomendada) | ✅ |
 | #25 | Experimentos de persistencia (recomendada) | ⏳ |
+| #52 | Los nodos se encuentran sin depender del DNS del cluster | ⏳ |
+| #53 | Una elección tardía dispara otra aunque ya haya primario | ⏳ |
 | #11 | SDK de OpenTelemetry (extra) | ⏳ |
 | #12 | Contexto entre nodos e hilos (extra) | ⏳ |
 | #13 | Contexto cliente → nodo (extra) | ⏳ |
