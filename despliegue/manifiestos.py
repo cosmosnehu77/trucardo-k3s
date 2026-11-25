@@ -9,12 +9,32 @@ from nodo import config
 _NOMBRE_SERVICIO = re.compile(r"^[a-z]([-a-z0-9]*[a-z0-9])?$")
 _LARGO_MAXIMO_HOST = 63
 
+# Rango por defecto de NodePort en Kubernetes.
+_NODEPORT_MIN = 30000
+_NODEPORT_MAX = 32767
+_DESPLAZAMIENTO_NODEPORT = 21000
+
 
 def _validar_host(host):
     if len(host) > _LARGO_MAXIMO_HOST or not _NOMBRE_SERVICIO.fullmatch(host):
         raise ValueError(
             f"host invalido para un Service de Kubernetes (DNS-1035, max {_LARGO_MAXIMO_HOST}): {host!r}"
         )
+
+
+def puerto_externo(puerto):
+    externo = puerto + _DESPLAZAMIENTO_NODEPORT
+    if not _NODEPORT_MIN <= externo <= _NODEPORT_MAX:
+        raise ValueError(
+            f"puerto interno {puerto} queda fuera del rango NodePort "
+            f"({_NODEPORT_MIN}..{_NODEPORT_MAX}): {externo}"
+        )
+    return externo
+
+
+def _nodos_ordenados(texto_nodos):
+    cluster = config.nodos(texto_nodos)
+    return [cluster[id_nodo] for id_nodo in sorted(cluster)]
 
 
 def _etiquetas(nodo):
@@ -66,16 +86,23 @@ def _service(nodo):
             "labels": _etiquetas(nodo),
         },
         "spec": {
+            "type": "NodePort",
             "selector": _etiquetas(nodo),
-            "ports": [{"name": nombre, "port": puerto, "targetPort": puerto}
-                      for nombre, puerto in _puertos(nodo).items()],
+            "ports": [
+                {
+                    "name": nombre,
+                    "port": puerto,
+                    "targetPort": puerto,
+                    "nodePort": puerto_externo(puerto),
+                }
+                for nombre, puerto in _puertos(nodo).items()
+            ],
         },
     }
 
 
 def manifiestos(texto_nodos, imagen):
-    cluster = config.nodos(texto_nodos)
-    ordenados = [cluster[id_nodo] for id_nodo in sorted(cluster)]
+    ordenados = _nodos_ordenados(texto_nodos)
     for nodo in ordenados:
         _validar_host(nodo.host)
 
@@ -86,20 +113,32 @@ def manifiestos(texto_nodos, imagen):
     return objetos
 
 
+def texto_clientes(texto_nodos, ip):
+    return ",".join(
+        f"{nodo.id_nodo}@{ip}:{puerto_externo(nodo.puerto_pyro)}:{puerto_externo(nodo.puerto_cluster)}"
+        for nodo in _nodos_ordenados(texto_nodos)
+    )
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Genera los manifiestos de Kubernetes para Trucardo en JSON."
     )
-    parser.add_argument("--imagen", required=True, help="Imagen del contenedor (ej. trucardo:local)")
+    modo = parser.add_mutually_exclusive_group(required=True)
+    modo.add_argument("--imagen", help="Imagen del contenedor (ej. trucardo:local)")
+    modo.add_argument("--clientes", metavar="IP", help="IP del cluster para clientes externos")
     args = parser.parse_args(argv)
 
     try:
-        items = manifiestos(config.texto_nodos(), args.imagen)
+        if args.clientes is not None:
+            salida = texto_clientes(config.texto_nodos(), args.clientes)
+        else:
+            items = manifiestos(config.texto_nodos(), args.imagen)
+            salida = json.dumps({"apiVersion": "v1", "kind": "List", "items": items}, indent=2)
     except ValueError as error:
         sys.exit(str(error))
 
-    salida = {"apiVersion": "v1", "kind": "List", "items": items}
-    print(json.dumps(salida, indent=2))
+    print(salida)
 
 
 if __name__ == "__main__":
