@@ -3,6 +3,7 @@ import ipaddress
 import json
 import re
 import sys
+from pathlib import Path
 
 from nodo import config
 
@@ -29,11 +30,84 @@ _DIRECTORIO_DATOS = "/datos"
 _DATOS_EN_LA_MAQUINA = "/var/lib/trucardo"
 
 IMAGEN_JAEGER = "jaegertracing/jaeger:2.23.0"
-_NOMBRE_JAEGER = "jaeger"
+IMAGEN_COLLECTOR = "otel/opentelemetry-collector:0.165.0"
+IMAGEN_PROMETHEUS = "prom/prometheus:v3.16.0"
+IMAGEN_LOKI = "grafana/loki:3.6.22"
+IMAGEN_GRAFANA = "grafana/grafana:13.3.2"
+
+_DIR_OBSERVABILIDAD = Path(__file__).resolve().parent / "observabilidad"
+_VOLUMEN_CONFIG = "config"
+_NOMBRE_COLLECTOR = "collector"
 # D6 aplicada al puerto del Service: 16686 + 21000 se sale del rango NodePort.
 PUERTO_INTERFAZ_JAEGER = 9686
-_PUERTO_INTERFAZ_JAEGER_CONTENEDOR = 16686
 _PUERTO_OTLP = 4318
+
+_OBSERVABILIDAD = (
+    {
+        "nombre": "jaeger",
+        "imagen": IMAGEN_JAEGER,
+        "desplazamiento": 0,
+        "tipo_service": "NodePort",
+        "puertos_contenedor": (("interfaz", 16686), ("otlp", _PUERTO_OTLP)),
+        "puertos_service": (
+            ("interfaz", PUERTO_INTERFAZ_JAEGER, 16686, True),
+            ("consulta", 16686, 16686, False),
+            ("otlp", _PUERTO_OTLP, _PUERTO_OTLP, False),
+        ),
+    },
+    {
+        "nombre": _NOMBRE_COLLECTOR,
+        "imagen": IMAGEN_COLLECTOR,
+        "desplazamiento": -1,
+        "tipo_service": "NodePort",
+        "puertos_contenedor": (("otlp", _PUERTO_OTLP),),
+        "puertos_service": (
+            ("otlp", _PUERTO_OTLP, _PUERTO_OTLP, False),
+            ("otlp-externo", 9318, _PUERTO_OTLP, True),
+        ),
+        "args": ("--config=/etc/otelcol/collector.json",),
+        "config": (("collector.json", "/etc/otelcol", False),),
+    },
+    {
+        "nombre": "prometheus",
+        "imagen": IMAGEN_PROMETHEUS,
+        "desplazamiento": -2,
+        "tipo_service": "NodePort",
+        "puertos_contenedor": (("interfaz", 9090),),
+        "puertos_service": (("interfaz", 9090, 9090, True),),
+        "args": (
+            "--config.file=/etc/prometheus/prometheus.json",
+            "--web.enable-otlp-receiver",
+        ),
+        "config": (("prometheus.json", "/etc/prometheus", False),),
+    },
+    {
+        "nombre": "loki",
+        "imagen": IMAGEN_LOKI,
+        "desplazamiento": -3,
+        "tipo_service": "ClusterIP",
+        "puertos_contenedor": (("http", 3100),),
+        "puertos_service": (("http", 3100, 3100, False),),
+    },
+    {
+        "nombre": "grafana",
+        "imagen": IMAGEN_GRAFANA,
+        "desplazamiento": -4,
+        "tipo_service": "NodePort",
+        "puertos_contenedor": (("interfaz", 3000),),
+        "puertos_service": (("interfaz", 9300, 3000, True),),
+        "env": (
+            ("GF_AUTH_ANONYMOUS_ENABLED", "true"),
+            ("GF_AUTH_ANONYMOUS_ORG_ROLE", "Admin"),
+            ("GF_AUTH_DISABLE_LOGIN_FORM", "true"),
+        ),
+        "config": (
+            ("fuentes.yaml", "/etc/grafana/provisioning/datasources/fuentes.yaml", True),
+            ("tableros.yaml", "/etc/grafana/provisioning/dashboards/tableros.yaml", True),
+            ("tablero-trucardo.json", "/etc/grafana/tableros/tablero-trucardo.json", True),
+        ),
+    },
+)
 
 
 def _validar_host(host):
@@ -67,8 +141,11 @@ def ip_servicio(nodo):
     return _ip_fija(nodo.id_nodo, f"id de nodo {nodo.id_nodo}")
 
 
-def _ip_jaeger():
-    return _ip_fija(0, _NOMBRE_JAEGER)
+def _host_aliases_observabilidad():
+    return [
+        {"ip": _ip_fija(s["desplazamiento"], s["nombre"]), "hostnames": [s["nombre"]]}
+        for s in _OBSERVABILIDAD
+    ]
 
 
 def _nodos_ordenados(texto_nodos):
@@ -129,8 +206,8 @@ def _anti_afinidad():
     }
 
 
-def _etiquetas_jaeger():
-    return {"app": _NOMBRE_JAEGER}
+def _etiquetas_servicio(nombre):
+    return {"app": nombre}
 
 
 def _env_telemetria():
@@ -145,7 +222,7 @@ def _env_telemetria():
         },
         {
             "name": "OTEL_EXPORTER_OTLP_ENDPOINT",
-            "value": f"http://{_NOMBRE_JAEGER}:{_PUERTO_OTLP}",
+            "value": f"http://{_NOMBRE_COLLECTOR}:{_PUERTO_OTLP}",
         },
         {
             "name": "OTEL_RESOURCE_ATTRIBUTES",
@@ -164,7 +241,7 @@ def _deployment(nodo, ordenados, texto_nodos, imagen, telemetria=False):
         {"name": "TRUCARDO_DATOS", "value": _DIRECTORIO_DATOS},
     ]
     if telemetria:
-        host_aliases.append({"ip": _ip_jaeger(), "hostnames": [_NOMBRE_JAEGER]})
+        host_aliases.extend(_host_aliases_observabilidad())
         env.extend(_env_telemetria())
     return {
         "apiVersion": "apps/v1",
@@ -238,68 +315,97 @@ def _service(nodo):
     }
 
 
-def _deployment_jaeger():
+def _configmap_observabilidad(servicio):
+    nombre = servicio["nombre"]
+    return {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "metadata": {
+            "name": nombre,
+            "labels": _etiquetas_servicio(nombre),
+        },
+        "data": {
+            archivo: (_DIR_OBSERVABILIDAD / archivo).read_text(encoding="utf-8")
+            for archivo, _, _ in servicio["config"]
+        },
+    }
+
+
+def _deployment_observabilidad(servicio):
+    nombre = servicio["nombre"]
+    etiquetas = _etiquetas_servicio(nombre)
+    contenedor = {
+        "name": nombre,
+        "image": servicio["imagen"],
+        "imagePullPolicy": "IfNotPresent",
+        "ports": [
+            {"name": nombre_puerto, "containerPort": puerto}
+            for nombre_puerto, puerto in servicio["puertos_contenedor"]
+        ],
+    }
+    if servicio.get("args"):
+        contenedor["args"] = list(servicio["args"])
+    if servicio.get("env"):
+        contenedor["env"] = [
+            {"name": clave, "value": valor} for clave, valor in servicio["env"]
+        ]
+
+    pod_spec = {
+        "hostAliases": _host_aliases_observabilidad(),
+        "containers": [contenedor],
+    }
+    if servicio.get("config"):
+        pod_spec["volumes"] = [
+            {"name": _VOLUMEN_CONFIG, "configMap": {"name": nombre}}
+        ]
+        contenedor["volumeMounts"] = [
+            (
+                {"name": _VOLUMEN_CONFIG, "mountPath": ruta, "subPath": archivo}
+                if con_subpath
+                else {"name": _VOLUMEN_CONFIG, "mountPath": ruta}
+            )
+            for archivo, ruta, con_subpath in servicio["config"]
+        ]
+
     return {
         "apiVersion": "apps/v1",
         "kind": "Deployment",
         "metadata": {
-            "name": _NOMBRE_JAEGER,
-            "labels": _etiquetas_jaeger(),
+            "name": nombre,
+            "labels": etiquetas,
         },
         "spec": {
             "replicas": 1,
-            "selector": {"matchLabels": _etiquetas_jaeger()},
+            "selector": {"matchLabels": etiquetas},
             "template": {
-                "metadata": {"labels": _etiquetas_jaeger()},
-                "spec": {
-                    "containers": [
-                        {
-                            "name": _NOMBRE_JAEGER,
-                            "image": IMAGEN_JAEGER,
-                            "imagePullPolicy": "IfNotPresent",
-                            "ports": [
-                                {
-                                    "name": "interfaz",
-                                    "containerPort": _PUERTO_INTERFAZ_JAEGER_CONTENEDOR,
-                                },
-                                {
-                                    "name": "otlp",
-                                    "containerPort": _PUERTO_OTLP,
-                                },
-                            ],
-                        }
-                    ],
-                },
+                "metadata": {"labels": etiquetas},
+                "spec": pod_spec,
             },
         },
     }
 
 
-def _service_jaeger():
+def _service_observabilidad(servicio):
+    nombre = servicio["nombre"]
+    etiquetas = _etiquetas_servicio(nombre)
+    puertos = []
+    for nombre_puerto, puerto, destino, con_nodeport in servicio["puertos_service"]:
+        entrada = {"name": nombre_puerto, "port": puerto, "targetPort": destino}
+        if con_nodeport:
+            entrada["nodePort"] = puerto_externo(puerto)
+        puertos.append(entrada)
     return {
         "apiVersion": "v1",
         "kind": "Service",
         "metadata": {
-            "name": _NOMBRE_JAEGER,
-            "labels": _etiquetas_jaeger(),
+            "name": nombre,
+            "labels": etiquetas,
         },
         "spec": {
-            "type": "NodePort",
-            "clusterIP": _ip_jaeger(),
-            "selector": _etiquetas_jaeger(),
-            "ports": [
-                {
-                    "name": "interfaz",
-                    "port": PUERTO_INTERFAZ_JAEGER,
-                    "targetPort": _PUERTO_INTERFAZ_JAEGER_CONTENEDOR,
-                    "nodePort": puerto_externo(PUERTO_INTERFAZ_JAEGER),
-                },
-                {
-                    "name": "otlp",
-                    "port": _PUERTO_OTLP,
-                    "targetPort": _PUERTO_OTLP,
-                },
-            ],
+            "type": servicio["tipo_service"],
+            "clusterIP": _ip_fija(servicio["desplazamiento"], nombre),
+            "selector": etiquetas,
+            "ports": puertos,
         },
     }
 
@@ -314,8 +420,11 @@ def manifiestos(texto_nodos, imagen, telemetria=False):
         objetos.append(_deployment(nodo, ordenados, texto_nodos, imagen, telemetria=telemetria))
         objetos.append(_service(nodo))
     if telemetria:
-        objetos.append(_deployment_jaeger())
-        objetos.append(_service_jaeger())
+        for servicio in _OBSERVABILIDAD:
+            if servicio.get("config"):
+                objetos.append(_configmap_observabilidad(servicio))
+            objetos.append(_deployment_observabilidad(servicio))
+            objetos.append(_service_observabilidad(servicio))
     return objetos
 
 
@@ -336,7 +445,7 @@ def main(argv=None):
     parser.add_argument(
         "--telemetria",
         action="store_true",
-        help="Agrega Jaeger y la configuracion de trazas OpenTelemetry",
+        help="Agrega la pila de observabilidad OpenTelemetry",
     )
     args = parser.parse_args(argv)
 

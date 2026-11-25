@@ -18,7 +18,7 @@ COPY nodo/ nodo/
 COPY cliente/ cliente/
 COPY despliegue/ despliegue/
 COPY tests/ tests/
-COPY run_tests.py demo.py ./
+COPY run_tests.py demo.py docker-compose.yml ./
 
 # docker compose stop equivale a un Ctrl+C: el nodo cierra sus puertos y sale
 STOPSIGNAL SIGINT

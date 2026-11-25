@@ -831,7 +831,7 @@ Cuando lo que se agrega es una fase entera, sus issues van en su fase y acá que
 | #16 | Experimentos con trazas (extra) | ✅ |
 | #26 | Métricas de dominio (extra) | ✅ |
 | #27 | Logs correlacionados con las trazas (extra) | ✅ |
-| #28 | Collector, Prometheus, Loki y Grafana (extra) | ⏳ |
+| #28 | Collector, Prometheus, Loki y Grafana (extra) | ✅ |
 | #29 | Experimentos con métricas y logs (extra) | ⏳ |
 | #30 | Volumen replicado con Longhorn (opcional) | ⏳ |
 | #31 | Experimentos: el nodo se muda con su disco (opcional) | ⏳ |
