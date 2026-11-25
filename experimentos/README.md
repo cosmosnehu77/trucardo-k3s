@@ -736,3 +736,189 @@ La curación, en una sola traza:
 - **Las demoras se ven en las duraciones.** Cada envío de N1 a todos espera 1 s, en paralelo, a los dos nodos que no contestan: 1 s para los desafíos y 1 s para el coordinador. Como el coordinador corre dentro de la elección, la elección suma 2 s. Mientras dura la partición, cada jugada de los dos primarios paga 1 s esperando el ack del otro lado.
 - **Toda la curación queda en una traza.** La primera jugada de N1 después de curarse recibe dos `ATRASADO`, y la puesta al día que lanza en otro hilo sigue siendo hija de esa jugada (#12). Manda desde la op 0 porque la punta de N2 es de una época que N1 no tiene (caso 9). N2 y N3 recortan las ops de la 1814 a la 1834, todas de la época 14. Las 20 primeras, N2 se las había confirmado a los clientes sin N1: es el límite del caso 11, ahora con nombre y número de operación. La 1834 quedó escrita en N2 y N3, pero no se confirmó: N1 la rechazó con `EPOCA_VIEJA`, N2 se bajó y su *span* terminó con error (`NoPrimario`). Por eso el *span* de esa jugada tiene un `replica` de N1, que no es un ack sino el rechazo.
 - **La partición también corta la telemetría.** De N2 faltan las jugadas de 10:07:39 a 10:07:53 (de la 1814 a la 1825): Jaeger corre en `maquina2`, del otro lado. El SDK junta los *spans* y los manda en lotes cada 5 s, desde un solo hilo. Cada envío espera hasta 10 s y, si no llega, descarta el lote. Los lotes de los primeros segundos vencieron durante el corte. Las jugadas desde las 10:07:54 seguían en la cola, o en un envío todavía en curso, cuando se curó la partición, y llegaron. Para no perderlas haría falta un *Collector* en cada máquina que guarde lo pendiente. Es una idea para la #28, no algo que esta fase necesite.
+
+## Métricas y logs
+
+Desde la #28, con `--telemetria`, los nodos mandan todo a un *Collector*, que reparte: las trazas a Jaeger, las métricas a Prometheus y los logs a Loki. Grafana muestra un tablero con las métricas de dominio de la #26 y los logs de la #27. Estos casos repiten experimentos anteriores con el tablero abierto.
+
+**Preparación.** Cargá las imágenes y aplicá los manifiestos con `--telemetria` (ver el [README](../README.md#cluster-local-de-desarrollo-k3s-en-contenedores)). El tablero queda en <http://172.30.0.11:30300/d/trucardo>. Para que el cliente también mande sus trazas, sumale `-e OTEL_EXPORTER_OTLP_ENDPOINT=http://172.30.0.11:30318`.
+
+**Cómo leer la evidencia.** Las tablas salen de la API de Prometheus de a 5 s, con las mismas consultas que los paneles. La única diferencia es «sin acks (1 min)»: la tabla suma los nodos en una columna, y el panel dibuja una línea por nodo. Un `-` es una consulta sin muestras: una serie que no llegó en los últimos 10 s o, en «sin acks», un contador que todavía no tiene dos muestras en el minuto. Los logs salen de Loki a través de Grafana, con el `trace_id` que guarda cada línea.
+
+## 16. La caída del primario y la de un backup, en el tablero
+
+**Guion.** Con una partida en curso, borrá el Pod del primario (caso 1). Cuando la partida siga, colgá un backup durante 20 s (caso 2) y reanudalo:
+
+```bash
+k delete pod -l nodo=2
+$C exec -T maquina2 kill -STOP <pid de N1>
+$C exec -T maquina2 kill -CONT <pid de N1>
+```
+
+**Qué se espera.** En la caída del primario, la época sube y el rol pasa a otro nodo. En el cuelgue del backup, su atraso crece y vuelve a 0 con la puesta al día.
+
+**Evidencia.**
+
+```
+11:09:47 kubectl delete pod -l nodo=2 (primario, en maquina3)
+
+hora      primarios  rol N1  rol N2  rol N3  época N1  época N2  época N3
+11:09:47          1       0       1       0        16        16        16
+11:09:52          1       0       1       0        16        16        16
+11:09:57          1       0       0       1        17        17        17
+
+11:09:49 trucardo-nodo2 maquina3 | arranco de backup y sin primario: se elige uno (…)
+11:09:50 trucardo-nodo1 maquina2 | 3.1 s sin latido de N2: lo doy por caido
+11:09:50 trucardo-nodo3 maquina1 | 3.2 s sin latido de N2: lo doy por caido
+11:09:52 trucardo-nodo3 maquina1 | gano la eleccion: soy el primario de la epoca 17
+11:09:53 beto: canta truco (primario N3, 5.0 s)
+```
+
+```
+11:11:20 kill -STOP N1 (backup)            11:11:40 kill -CONT N1
+
+hora      atraso N3→N1  atraso N3→N2  rol N1  sin acks (1 min)  p99
+11:11:25             0             0       0                 -  0.04 s
+11:11:30             4             1       -                 -   1.9 s
+11:11:35             9             1       -                11  2.25 s
+11:11:40            14             1       -                16  2.35 s
+11:11:45             0             0       0                19   2.4 s
+
+11:11:21 [N3│PRIMARIO│e=17] N1 fuera de la vista: no contesta el latido
+11:11:41 [N3│PRIMARIO│e=17] N1 entra a la vista (ultimo_seq 3393)
+11:11:41 [N3│PRIMARIO│e=17] N1 esta en la op 3395 y yo en la 3396: le mando las 1 que le faltan
+11:11:41 [N3│PRIMARIO│e=17] N1 quedo al dia en la op 3396
+```
+
+![El tablero: el rol pasa de N2 a N3 con la época 17, y el atraso de N1 crece mientras está colgado](capturas/tablero-caida.png)
+
+**Por qué.**
+
+- **El cambio de primario se ve en dos paneles a la vez.** En «Rol por nodo», la línea de N2 baja y la de N3 sube. En «Época por nodo», los tres pasan a la 17. Son las métricas que la #26 lee del propio nodo, sin preguntarle a nadie.
+- **El N2 nuevo volvió con su disco.** Kubernetes creó el Pod en la misma máquina, y arrancó en la op 3072, la misma que los otros (caso 8). Por eso no hubo nada que poner al día.
+- **Un nodo colgado no exporta.** Mientras N1 está detenido, su rol no llega (`-`). Lo que se ve es lo que el primario sabe de él: su atraso crece de a unas 5 ops cada 5 s, que es lo que se juega en ese tiempo.
+- **El atraso de N2 marca 1 mientras N1 está colgado, y es un error de medición.** Cada jugada tiene tomado el lock del primario durante 1 s, esperando el ack de N1 (caso 3). Un latido que N2 contestó justo antes de esa réplica espera el mismo lock y, cuando la jugada termina, anota el `seq` anterior encima del ack. Se corrige en la #67.
+- **El cuelgue cuesta latencia.** La p99 sube a unos 2,4 s y crecen las operaciones confirmadas sin todos los acks: es lo que el caso 3 dedujo de las demoras del cliente, ahora medido.
+- **Al reanudarse, el atraso vuelve a 0 en la misma ronda de latido.** N1 aplica primero las réplicas que habían quedado en la cola del socket (caso 11): por eso vuelve en la 3393, a 3 ops del primario y no a 14. El latido del primario le manda la op que le falta (#23), y la respuesta de esa puesta al día lo deja al día.
+
+## 17. Límite: el cerebro dividido en el tablero
+
+**Guion.** Armá dos partidas. Los dos jugadores de una conocen sólo al primario (`TRUCARDO_NODOS="3@172.30.0.11:30503:30603"`), y los de la otra, sólo a los otros dos (`"1@172.30.0.11:30501:30601,2@172.30.0.11:30502:30602"`). Cortá el tráfico entre nodos (puertos 9601 a 9603) en la máquina del primario durante 30 s. El tráfico de los clientes y la telemetría no se cortan, a diferencia del caso 15:
+
+```bash
+$C exec -T maquina1 sh -c 'iptables -I FORWARD -p tcp --dport 9601:9603 -j DROP; iptables -I FORWARD -p tcp --sport 9601:9603 -j DROP'
+```
+
+Después curá la partición, con el mismo comando y `-D` en lugar de `-I`.
+
+**Qué se espera.** El panel «Primarios simultáneos» marca 2 y se pone rojo. Crecen las operaciones confirmadas sin todos los acks. Al curarse, el primario viejo se baja.
+
+**Evidencia.**
+
+```
+11:13:10 particion de Trucardo en maquina1 (N3, primario)    11:13:41 se cura
+
+hora      primarios  rol N1  rol N2  rol N3  época N1  época N2  época N3  atraso N3→N1  atraso N2→N3  sin acks (1 min)
+11:13:15          1       0       0       1        17        17        17             0             -                 0
+11:13:20          1       0       0       1        17        17        17             5             -                 5
+11:13:25          2       0       1       1        18        18        17             9          3662                10
+11:13:30          2       0       1       1        18        18        17            13          3666                24
+11:13:35          2       0       1       1        18        18        17            16          3670                31
+11:13:40          2       0       1       1        18        18        17            20          3675                40
+11:13:45          2       0       1       1        18        18        17            23          3679                47
+11:13:50          1       0       1       0        18        18        18            23             0                49
+
+11:13:14 trucardo-nodo2 | 3.0 s sin latido de N3: lo doy por caido
+11:13:15 trucardo-nodo2 | arranco una eleccion (epoca_ultima 17, ultimo_seq 3658)
+11:13:16 trucardo-nodo2 | gano la eleccion: soy el primario de la epoca 18
+11:13:42 trucardo-nodo3 | replicando la op 3682 me entero de que hay epoca 18 y yo estoy en la 17: me bajo
+11:13:42 trucardo-nodo3 | recorto el log de la op 3682 a la 3658: diverge del primario
+```
+
+![El tablero durante la partición: dos primarios, en las épocas 17 y 18](capturas/tablero-cerebro-dividido.png)
+
+**Por qué.**
+
+- **El panel suma el rol de cada nodo.** Cada nodo informa si se cree primario, y entre 11:13:25 y 11:13:45 lo creen dos: N3 en la época 17 y N2 en la 18. Ningún nodo sabe que hay dos primarios. Lo sabe el tablero, porque los ve a todos.
+- **Se ve porque la telemetría sigue llegando.** La partición corta sólo los puertos de Trucardo. En el caso 15 se cortaba toda la máquina, y se perdían los *spans* del lado aislado.
+- **Los dos lados confirman sin todos los acks.** N3 no tiene backups, y N2 confirma sólo con N1. En el panel suben las dos líneas, la de N3 a unas 25 y la de N2 a unas 22: 47 entre las dos en un minuto.
+- **El atraso de N3 hacia los otros crece, y no se corrige al curarse.** Llega a 23: las ops de la 3659 a la 3681, que N3 confirmó solo y que N1 y N2 no van a tener. Al replicar la 3682, ya curada la partición, N3 se entera de la época 18 y se baja sin confirmarla. Recorta las 24, de la 3682 a la 3658. Es el límite del caso 11, ahora medido. Como backup deja de exportar el atraso, y la serie desaparece cuando vence la ventana de 10 s.
+- **El atraso de N2 hacia N3 está mal.** N2 nunca supo en qué op estaba N3, y la métrica lo contaba desde la 0. N3 tenía las primeras 3658 ops de N2: a las 11:13:25 le faltaban 4, no 3662. Se corrige en la #67.
+
+## 18. De un log a su traza
+
+**Guion.** En el panel de logs del tablero, o en *Explore* con la fuente Loki, buscá una línea con `trace_id`. Por ejemplo, la de la elección del caso 17:
+
+```
+{service_name=~"trucardo-nodo."} |= "arranco una eleccion"
+```
+
+Al abrir la línea, el campo `trace_id` tiene un enlace a Jaeger.
+
+**Qué se espera.** La traza de esa elección, con los mensajes de los otros nodos.
+
+**Evidencia.**
+
+```
+11:13:15 trucardo-nodo2 trace_id=af00d02de0386227647fff9cbbb91de1 | arranco una eleccion (epoca_ultima 17, ultimo_seq 3658)
+11:13:15 trucardo-nodo1 trace_id=a64ac4f7a0c19a01becc0e358f4e92eb | arranco una eleccion (epoca_ultima 17, ultimo_seq 3658)
+11:13:16 trucardo-nodo2 trace_id=af00d02de0386227647fff9cbbb91de1 | gano la eleccion: soy el primario de la epoca 18
+
+traza af00d02de0386227647fff9cbbb91de1
+11:13:15.222 eleccion               trucardo-nodo2  maquina3  2018.6 ms  rol=backup epoca=17 resultado=gano
+11:13:15.231   desafio                trucardo-nodo1  maquina2     0.0 ms  rol=backup epoca=17 candidato=2 le_gano=False
+11:13:16.238   coordinador            trucardo-nodo2  maquina3  1001.5 ms  rol=primario epoca=18
+11:13:16.239     coordinador recibido   trucardo-nodo1  maquina2     4.6 ms  rol=backup epoca=18 primario=2 aceptado=True
+```
+
+![La traza de la elección, a la que lleva el trace_id del log](capturas/log-a-traza.png)
+
+**Por qué.**
+
+- **Las dos líneas del ganador tienen el mismo `trace_id`.** Cada línea se escribe dentro del *span* activo (#27), y las dos son de la misma elección.
+- **N1 también arrancó una elección, con otra traza.** Los dos backups detectaron el silencio casi a la vez. En la traza de N1, el `desafio` de N2 dice `le_gano=True`: N2 tiene mejores credenciales, y N1 perdió. En la de N2, el `desafio` de N1 dice `le_gano=False`. Desde el log de N1 se llega a esa otra traza.
+- **El enlace lo arma Grafana.** Loki guarda `trace_id` como metadato de la línea, y el campo derivado de la fuente Loki (#28) lo convierte en una consulta a Jaeger. Ningún nodo conoce la URL de Jaeger.
+- **El log dice qué pasó y la traza dice quién habló con quién.** El log de N2 no dice que N1 contestó, ni cuánto tardó cada paso. La traza no tiene el texto de la decisión. Juntos, alcanzan.
+
+## 19. Qué agrega OpenTelemetry a lo que ya da Kubernetes
+
+**Guion.** Pedile a Kubernetes los logs del Pod de N2 que se borró en el caso 16, y su consumo:
+
+```bash
+k logs trucardo-nodo2-68b744c9b7-8k48r --tail 2
+k top pods
+```
+
+Buscá las mismas líneas en Loki, por el nombre del Pod:
+
+```
+{service_name=~"trucardo-nodo."} | k8s_pod_name="trucardo-nodo2-68b744c9b7-8k48r"
+```
+
+**Evidencia.**
+
+```
+$ k logs trucardo-nodo2-68b744c9b7-8k48r --tail 2
+error: error from server (NotFound): pods "trucardo-nodo2-68b744c9b7-8k48r" not found in namespace "default"
+
+$ k top pods
+error: Metrics API not available
+
+Loki:
+11:09:47 trucardo-nodo2-68b744c9b7-8k48r | op 3070 · cantar · beto · mesa fd05aa · la tienen 2/2 de los que contestaron
+11:09:47 trucardo-nodo2-68b744c9b7-8k48r | op 3071 · responder · leo · mesa fd05aa · la tienen 2/2 de los que contestaron
+11:09:47 trucardo-nodo2-68b744c9b7-8k48r | op 3072 · jugar · beto · mesa fd05aa · la tienen 2/2 de los que contestaron
+```
+
+**Por qué.**
+
+| | Kubernetes | OpenTelemetry |
+| --- | --- | --- |
+| **Logs** | `kubectl logs` lee la salida de un contenedor que existe. Con `--previous` llega al contenedor anterior del mismo Pod, pero no a un Pod borrado ni a uno de una máquina apagada. | Loki guarda los logs de todos los Pods, también de los que ya no existen. Cada línea lleva el nodo, el rol, la época y el `trace_id`. |
+| **Ver varios nodos juntos** | Un Pod por vez. Para ver una elección hay que abrir tres terminales y ordenar las horas a mano. | Una consulta junta los tres nodos en orden, y una traza muestra quién le habló a quién. |
+| **Métricas** | `kubectl top` da CPU y memoria por Pod y por máquina, con metrics-server. Este proyecto lo desactiva al instalar k3s (`--disable metrics-server`), en el cluster local y en las máquinas reales, por eso el error. Se activa instalando k3s sin esa opción. | Métricas de dominio: rol, época, atraso, operaciones y latencia de confirmación. Kubernetes no sabe que existe un primario. |
+| **Salud** | Sabe si el proceso corre y si la *probe* contesta. Un nodo colgado sigue `Running` (caso 2). | El nodo colgado deja de exportar, y el primario informa su atraso (caso 16). |
+| **Historia** | Los eventos duran una hora, y los logs se rotan con el contenedor. | Lo que guarden Prometheus, Loki y Jaeger. En este despliegue, mientras no se muden sus Pods. |
+
+- **Kubernetes ve contenedores y OpenTelemetry ve el protocolo.** Para Kubernetes, un cerebro dividido son tres Pods `Running`. Para el tablero son dos primarios.
+- **Kubernetes sigue siendo necesario.** Es quien recrea el Pod y le da su disco. OpenTelemetry sólo lo cuenta.

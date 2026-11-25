@@ -792,6 +792,25 @@ Cuando lo que se agrega es una fase entera, sus issues van en su fase y acá que
 
 ---
 
+### #67 El atraso de un backup se mide mal: desde la op 0 si no se lo conoce, y con latidos viejos
+- **Requisitos:** RF-21
+- **Tipo:** código
+- **Depende de:** #26
+- **Problema:** `_observar_atraso` usa `visto.get(otro, 0)`. Un nodo del que el primario no conoce ningún `seq` cuenta como si estuviera en la op 0, y su atraso es el log entero.
+
+  Además, un latido viejo pisa un ack nuevo. `latir_a` manda el latido sin el lock, y anota la respuesta después de tomarlo. Si el backup contestó antes de recibir la réplica de una jugada en curso, la jugada anota el ack y, al soltar el lock, el latido anota el `seq` anterior. El atraso queda en 1 hasta el próximo latido.
+- **Cómo se vio:** en la #29 (caso 17), N2 se coronó en la época 18 sin haber recibido nunca un ack ni un latido de N3, que estaba aislado. El tablero mostró N2 → N3 = 3662 ops, cuando a N3 le faltaban 4.
+- **Qué hacer:**
+  - primero, un test: un primario recién coronado no informa el atraso de un backup del que no sabe nada;
+  - después, observar el atraso sólo de los nodos que están en `visto`;
+  - un test determinístico de la carrera: una respuesta de latido con un `seq` anterior a un ack ya anotado no lo pisa. Ojo: no alcanza con quedarse con el mayor, porque un backup que recorta su log vuelve atrás de verdad.
+- **Criterios de aceptación:**
+  - un backup que el primario no conoce no aparece en «Atraso de cada backup»;
+  - con un backup colgado, el atraso de los otros se queda en 0.
+- **Tests:** el de arriba, que tiene que fallar antes del cambio.
+
+---
+
 ## 11. Calendario sugerido
 
 | Día | Issues | Nota |
@@ -832,7 +851,8 @@ Cuando lo que se agrega es una fase entera, sus issues van en su fase y acá que
 | #26 | Métricas de dominio (extra) | ✅ |
 | #27 | Logs correlacionados con las trazas (extra) | ✅ |
 | #28 | Collector, Prometheus, Loki y Grafana (extra) | ✅ |
-| #29 | Experimentos con métricas y logs (extra) | ⏳ |
+| #29 | Experimentos con métricas y logs (extra) | ✅ |
+| #67 | El atraso de un backup se mide mal: desde la op 0 si no se lo conoce, y con latidos viejos | ⏳ |
 | #30 | Volumen replicado con Longhorn (opcional) | ⏳ |
 | #31 | Experimentos: el nodo se muda con su disco (opcional) | ⏳ |
 | #17 | README final y prueba limpia | ⏳ |
