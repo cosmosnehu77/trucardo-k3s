@@ -1,4 +1,5 @@
 import io
+import ipaddress
 import json
 from contextlib import redirect_stderr, redirect_stdout
 
@@ -186,6 +187,49 @@ def test_service_usa_host_y_selector():
         assert s["apiVersion"] == "v1"
         assert s["metadata"]["name"] == f"nodo{i}"
         assert s["spec"]["selector"] == {"app": "trucardo", "nodo": str(i)}
+
+
+def test_cada_service_tiene_una_cluster_ip_fija_distinta_y_en_la_banda_baja():
+    banda_baja = ipaddress.ip_network("10.43.0.0/24")
+    services = _por_tipo(manifiestos(CLUSTER_TRES, IMAGEN), "Service")
+
+    assert len(services) == 3
+    ips = [s["spec"]["clusterIP"] for s in services]
+    assert ips == ["10.43.0.101", "10.43.0.102", "10.43.0.103"]
+    assert len(set(ips)) == 3
+    for ip in ips:
+        assert ipaddress.ip_address(ip) in banda_baja
+
+
+def test_los_host_aliases_tienen_todos_los_nodos_con_la_ip_de_su_service():
+    objetos = manifiestos(CLUSTER_TRES, IMAGEN)
+    deployments = _por_tipo(objetos, "Deployment")
+    services = _por_tipo(objetos, "Service")
+
+    assert len(deployments) == 3
+    for d in deployments:
+        aliases = d["spec"]["template"]["spec"]["hostAliases"]
+        assert aliases == [
+            {"ip": s["spec"]["clusterIP"], "hostnames": [s["metadata"]["name"]]}
+            for s in services
+        ]
+
+
+def test_un_id_que_no_entra_en_la_banda_da_error():
+    for entrada in ("200@nodo200:9501:9601", "156@nodo156:9501:9601"):
+        try:
+            manifiestos(entrada, IMAGEN)
+        except ValueError:
+            continue
+        raise AssertionError(f"entrada {entrada!r} tendria que haber dado ValueError")
+
+    with _entorno(TRUCARDO_NODOS="200@nodo200:9501:9601"):
+        try:
+            main(["--imagen", IMAGEN])
+        except SystemExit as salida:
+            assert "200" in str(salida.code)
+        else:
+            raise AssertionError("un id fuera de la banda tiene que cortar el CLI con un error")
 
 
 def test_los_puertos_externos_siguen_la_regla_y_caen_en_el_rango():

@@ -164,6 +164,8 @@ Generá los manifiestos desde la raíz del repo:
 TRUCARDO_NODOS="1@nodo1:9501:9601,2@nodo2:9502:9602,3@nodo3:9503:9603" python3 -m despliegue.manifiestos --imagen trucardo:local > trucardo.json
 ```
 
+El generador fija la IP de cada Service (`10.43.0.101` para el nodo 1, y así), para que los nodos se encuentren sin depender de CoreDNS. Esas IPs están dentro del rango de Services que k3s usa por defecto, `10.43.0.0/16`. Si instalás k3s con otro `--service-cidr`, cambialas en `despliegue/manifiestos.py`.
+
 Consultá la versión de k3s fijada en el cluster local y anotala (va donde dice `<version>` más abajo):
 
 ```bash

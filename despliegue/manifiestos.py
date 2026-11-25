@@ -1,4 +1,5 @@
 import argparse
+import ipaddress
 import json
 import re
 import sys
@@ -15,6 +16,10 @@ _LARGO_MAXIMO_HOST = 63
 _NODEPORT_MIN = 30000
 _NODEPORT_MAX = 32767
 _DESPLAZAMIENTO_NODEPORT = 21000
+
+# k3s asigna las clusterIP al azar en 10.43.0.0/16 y deja la banda baja (las primeras 256) para IPs fijas.
+_BASE_IP_SERVICIO = ipaddress.ip_address("10.43.0.100")
+_RED_IP_FIJAS = ipaddress.ip_network("10.43.0.0/24")
 
 _PROBE_FALLAS = 3
 _TOLERANCIA_SEGUNDOS = 10
@@ -39,6 +44,16 @@ def puerto_externo(puerto):
             f"({_NODEPORT_MIN}..{_NODEPORT_MAX}): {externo}"
         )
     return externo
+
+
+def ip_servicio(nodo):
+    ip = _BASE_IP_SERVICIO + nodo.id_nodo
+    if ip not in _RED_IP_FIJAS:
+        raise ValueError(
+            f"id de nodo {nodo.id_nodo} queda fuera de la banda de IPs fijas "
+            f"({_RED_IP_FIJAS}): {ip}"
+        )
+    return str(ip)
 
 
 def _nodos_ordenados(texto_nodos):
@@ -99,7 +114,7 @@ def _anti_afinidad():
     }
 
 
-def _deployment(nodo, texto_nodos, imagen):
+def _deployment(nodo, ordenados, texto_nodos, imagen):
     return {
         "apiVersion": "apps/v1",
         "kind": "Deployment",
@@ -114,6 +129,10 @@ def _deployment(nodo, texto_nodos, imagen):
             "template": {
                 "metadata": {"labels": _etiquetas(nodo)},
                 "spec": {
+                    "hostAliases": [
+                        {"ip": ip_servicio(n), "hostnames": [n.host]}
+                        for n in ordenados
+                    ],
                     "tolerations": _tolerancias(),
                     "affinity": _anti_afinidad(),
                     "volumes": [
@@ -159,6 +178,7 @@ def _service(nodo):
         },
         "spec": {
             "type": "NodePort",
+            "clusterIP": ip_servicio(nodo),
             "selector": _etiquetas(nodo),
             "ports": [
                 {
@@ -180,7 +200,7 @@ def manifiestos(texto_nodos, imagen):
 
     objetos = []
     for nodo in ordenados:
-        objetos.append(_deployment(nodo, texto_nodos, imagen))
+        objetos.append(_deployment(nodo, ordenados, texto_nodos, imagen))
         objetos.append(_service(nodo))
     return objetos
 
