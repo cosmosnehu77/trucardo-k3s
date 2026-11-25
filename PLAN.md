@@ -761,7 +761,7 @@ Cuando lo que se agrega es una fase entera, sus issues van en su fase y acá que
 | #38 | Elección trabada entre candidatos de épocas distintas | ✅ |
 | #39 | Tests de membresía que miran estados transitorios | ✅ |
 | #5 | Generador de manifiestos | ✅ |
-| #6 | Acceso de clientes desde fuera del cluster | ⏳ |
+| #6 | Acceso de clientes desde fuera del cluster | ✅ |
 | #7 | Tolerancia a fallas de infraestructura | ⏳ |
 | #8 | Cluster local de desarrollo | ⏳ |
 | #9 | Despliegue en máquinas reales | ⏳ |

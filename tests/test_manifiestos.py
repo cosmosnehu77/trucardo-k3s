@@ -1,8 +1,8 @@
 import io
 import json
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 
-from despliegue.manifiestos import main, manifiestos
+from despliegue.manifiestos import main, manifiestos, texto_clientes
 from nodo import config
 from tests.test_config import _entorno
 
@@ -72,7 +72,7 @@ def test_trucardo_nodos_en_entorno_es_identico_a_la_entrada():
         assert {"name": "TRUCARDO_NODOS", "value": entrada} in env
 
 
-def test_service_usa_host_selector_y_ambos_puertos():
+def test_service_usa_host_y_selector():
     services = _por_tipo(manifiestos(CLUSTER_TRES, IMAGEN), "Service")
 
     assert len(services) == 3
@@ -80,10 +80,45 @@ def test_service_usa_host_selector_y_ambos_puertos():
         assert s["apiVersion"] == "v1"
         assert s["metadata"]["name"] == f"nodo{i}"
         assert s["spec"]["selector"] == {"app": "trucardo", "nodo": str(i)}
+
+
+def test_los_puertos_externos_siguen_la_regla_y_caen_en_el_rango():
+    services = _por_tipo(manifiestos(CLUSTER_TRES, IMAGEN), "Service")
+
+    assert len(services) == 3
+    for i, s in enumerate(services, start=1):
+        assert s["spec"]["type"] == "NodePort"
         assert s["spec"]["ports"] == [
-            {"name": "pyro", "port": 9500 + i, "targetPort": 9500 + i},
-            {"name": "cluster", "port": 9600 + i, "targetPort": 9600 + i},
+            {"name": "pyro", "port": 9500 + i, "targetPort": 9500 + i, "nodePort": 30500 + i},
+            {"name": "cluster", "port": 9600 + i, "targetPort": 9600 + i, "nodePort": 30600 + i},
         ]
+        for puerto in s["spec"]["ports"]:
+            assert 30000 <= puerto["nodePort"] <= 32767
+
+
+def test_el_valor_para_clientes_ida_y_vuelta():
+    texto = texto_clientes(CLUSTER_TRES, "192.168.0.11")
+    cluster = config.nodos(texto)
+
+    assert set(cluster) == set(config.nodos(CLUSTER_TRES))
+    for id_nodo in (1, 2, 3):
+        nodo = cluster[id_nodo]
+        assert nodo.host == "192.168.0.11"
+        assert nodo.puerto_pyro == 30500 + id_nodo
+        assert nodo.puerto_cluster == 30600 + id_nodo
+
+
+def test_un_puerto_interno_fuera_de_rango_da_error():
+    for entrada in ("1@nodo1:12000:9601", "1@nodo1:8000:9601"):
+        for llamada in (
+            lambda e=entrada: manifiestos(e, IMAGEN),
+            lambda e=entrada: texto_clientes(e, "192.168.0.11"),
+        ):
+            try:
+                llamada()
+            except ValueError:
+                continue
+            raise AssertionError(f"entrada {entrada!r} tendria que haber dado ValueError")
 
 
 def test_host_invalido_da_value_error():
@@ -134,3 +169,23 @@ def test_cli_sin_variable_usa_default_de_config():
     assert datos["apiVersion"] == "v1"
     assert datos["kind"] == "List"
     assert datos["items"] == manifiestos(config.NODOS_POR_DEFECTO, IMAGEN)
+
+
+def test_cli_clientes_imprime_el_valor():
+    buffer = io.StringIO()
+    with _entorno(TRUCARDO_NODOS=CLUSTER_TRES):
+        with redirect_stdout(buffer):
+            main(["--clientes", "192.168.0.11"])
+
+    assert buffer.getvalue() == texto_clientes(CLUSTER_TRES, "192.168.0.11") + "\n"
+
+
+def test_cli_pide_imagen_o_clientes():
+    for argv in ([], ["--imagen", IMAGEN, "--clientes", "1.2.3.4"]):
+        with redirect_stderr(io.StringIO()):
+            try:
+                main(argv)
+            except SystemExit as salida:
+                assert salida.code != 0
+            else:
+                raise AssertionError(f"argv {argv!r} tendria que haber terminado con SystemExit")
