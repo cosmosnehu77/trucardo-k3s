@@ -71,3 +71,7 @@ def puntos(texto=None):
     if valor <= 0:
         raise ValueError(f"PUNTOS tiene que ser mayor que 0, llego {valor}")
     return valor
+
+
+def directorio_datos():
+    return os.environ.get("TRUCARDO_DATOS") or None

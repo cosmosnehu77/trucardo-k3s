@@ -14,7 +14,7 @@ import uuid
 
 import Pyro5.api
 
-from nodo import config, registro
+from nodo import config, disco, registro
 from nodo.cluster.protocolo import AL_DIA, ATRASADO, DUPLICADA, ILEGAL
 from nodo.errores import NoPrimario
 from nodo.estado import EstadoServicio
@@ -32,7 +32,7 @@ Pyro5.config.SERVERTYPE = "thread"
 
 @Pyro5.api.expose
 class ServidorTruco:
-    def __init__(self, id_nodo=1, puntos=None, primario=None):
+    def __init__(self, id_nodo=1, puntos=None, primario=None, disco=None):
         self.id_nodo = id_nodo
         self.puntos = config.puntos() if puntos is None else puntos
         self.reloj = Reloj()
@@ -40,14 +40,44 @@ class ServidorTruco:
         # Todo acceso al estado va con este lock. Es reentrante porque los
         # metodos publicos lo toman y llaman a _atender(), que lo vuelve a tomar.
         self.lock = threading.RLock()
+        self.disco = disco
 
         # Lo propio de este nodo, que no se replica. Sin primario, el nodo es
         # el suyo (un solo nodo).
         self.primario = id_nodo if primario is None else primario
         self.rol = "primario" if self.primario == id_nodo else "backup"
-        self.epoca = 0
+        self._epoca = 0
 
         self.estado = EstadoServicio()      # lo que se replica
+        if disco is not None:
+            self.estado = self._estado_guardado()
+            self._epoca = disco.epoca()
+
+    @property
+    def epoca(self):
+        return self._epoca
+
+    @epoca.setter
+    def epoca(self, valor):
+        if self.disco is not None and valor != self._epoca:
+            self.disco.guardar_epoca(valor)
+        self._epoca = valor
+
+    def _estado_guardado(self):
+        estado = EstadoServicio()
+        for op in self.disco.operaciones():
+            estado.aplicar(op)
+        return estado
+
+    def _aplicar(self, op):
+        self.estado.aplicar(op)
+        if self.disco is not None:
+            try:
+                self.disco.agregar(op)
+            except OSError as error:
+                log.error(f"no pude guardar la op {op['seq']} en disco: {error}")
+                self.estado = self._estado_guardado()
+                raise
 
     def _set_membresia(self, membresia):
         self.__membresia = membresia
@@ -163,7 +193,7 @@ class ServidorTruco:
                   "lamport": self.reloj.tic(), "tipo": tipo, "id_sesion": id_sesion,
                   "id_operacion": id_operacion, "datos": datos}
 
-            self.estado.aplicar(op)
+            self._aplicar(op)
 
             replicas = ""
             if self.__membresia is not None:
@@ -213,7 +243,9 @@ class ServidorTruco:
             return ATRASADO
 
         try:
-            self.estado.aplicar(op)
+            self._aplicar(op)
+        except OSError:
+            return ATRASADO
         except Exception as error:
             log.warning(f"no pude aplicar la op {op['seq']}: {error}")
             return ILEGAL
@@ -240,7 +272,7 @@ def main():
         cluster = config.nodos()
         if id_nodo not in cluster:
             sys.exit(f"el nodo {id_nodo} no esta en TRUCARDO_NODOS (estan: {sorted(cluster)})")
-        servidor = ServidorTruco(id_nodo)
+        servidor = ServidorTruco(id_nodo, disco=disco.abrir(config.directorio_datos()))
     except ValueError as error:
         sys.exit(f"configuracion invalida: {error}")
     yo = cluster[id_nodo]
