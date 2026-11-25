@@ -339,3 +339,102 @@ def test_cli_pide_imagen_o_clientes():
                 assert salida.code != 0
             else:
                 raise AssertionError(f"argv {argv!r} tendria que haber terminado con SystemExit")
+
+
+def test_sin_telemetria_no_aparece_jaeger_ni_variables_otel():
+    objetos = manifiestos(CLUSTER_TRES, IMAGEN)
+
+    assert objetos == manifiestos(CLUSTER_TRES, IMAGEN, telemetria=False)
+    assert all(obj["metadata"]["name"] != "jaeger" for obj in objetos)
+    for d in _por_tipo(objetos, "Deployment"):
+        pod = d["spec"]["template"]["spec"]
+        for alias in pod["hostAliases"]:
+            assert "jaeger" not in alias["hostnames"]
+        for c in pod["containers"]:
+            for var in c["env"]:
+                assert not var["name"].startswith(("OTEL_", "K8S_"))
+
+
+def test_con_telemetria_agrega_deployment_y_service_jaeger():
+    objetos = manifiestos(CLUSTER_TRES, IMAGEN, telemetria=True)
+
+    assert len(objetos) == 8
+    dep_jaeger, svc_jaeger = objetos[-2], objetos[-1]
+
+    assert dep_jaeger["apiVersion"] == "apps/v1"
+    assert dep_jaeger["kind"] == "Deployment"
+    assert dep_jaeger["metadata"] == {"name": "jaeger", "labels": {"app": "jaeger"}}
+    assert dep_jaeger["spec"]["replicas"] == 1
+    assert dep_jaeger["spec"]["selector"] == {"matchLabels": {"app": "jaeger"}}
+    assert dep_jaeger["spec"]["template"]["metadata"]["labels"] == {"app": "jaeger"}
+
+    contenedores = dep_jaeger["spec"]["template"]["spec"]["containers"]
+    assert len(contenedores) == 1
+    c = contenedores[0]
+    assert c["name"] == "jaeger"
+    assert c["image"] == "jaegertracing/jaeger:2.23.0"
+    assert c["ports"] == [
+        {"name": "interfaz", "containerPort": 16686},
+        {"name": "otlp", "containerPort": 4318},
+    ]
+
+    assert svc_jaeger["apiVersion"] == "v1"
+    assert svc_jaeger["kind"] == "Service"
+    assert svc_jaeger["metadata"] == {"name": "jaeger", "labels": {"app": "jaeger"}}
+    assert svc_jaeger["spec"]["type"] == "NodePort"
+    assert svc_jaeger["spec"]["clusterIP"] == "10.43.0.100"
+    assert svc_jaeger["spec"]["selector"] == {"app": "jaeger"}
+    assert svc_jaeger["spec"]["ports"] == [
+        {"name": "interfaz", "port": 9686, "targetPort": 16686, "nodePort": 30686},
+        {"name": "otlp", "port": 4318, "targetPort": 4318},
+    ]
+
+
+def test_con_telemetria_los_nodos_apuntan_a_jaeger_y_declaran_downward_api():
+    objetos = manifiestos(CLUSTER_TRES, IMAGEN, telemetria=True)
+    deployments_nodos = [
+        d for d in _por_tipo(objetos, "Deployment") if d["metadata"]["name"] != "jaeger"
+    ]
+
+    assert len(deployments_nodos) == 3
+    for d in deployments_nodos:
+        pod = d["spec"]["template"]["spec"]
+        assert pod["hostAliases"][-1] == {"ip": "10.43.0.100", "hostnames": ["jaeger"]}
+        env = pod["containers"][0]["env"]
+        assert env[-4:] == [
+            {"name": "K8S_POD_NAME", "valueFrom": {"fieldRef": {"fieldPath": "metadata.name"}}},
+            {"name": "K8S_NODE_NAME", "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}}},
+            {"name": "OTEL_EXPORTER_OTLP_ENDPOINT", "value": "http://jaeger:4318"},
+            {
+                "name": "OTEL_RESOURCE_ATTRIBUTES",
+                "value": "k8s.pod.name=$(K8S_POD_NAME),k8s.node.name=$(K8S_NODE_NAME)",
+            },
+        ]
+
+
+def test_cli_con_telemetria_imprime_json_con_jaeger():
+    buffer = io.StringIO()
+    with _entorno(TRUCARDO_NODOS=CLUSTER_TRES):
+        with redirect_stdout(buffer):
+            main(["--imagen", IMAGEN, "--telemetria"])
+
+    datos = json.loads(buffer.getvalue())
+    assert datos == {
+        "apiVersion": "v1",
+        "kind": "List",
+        "items": manifiestos(CLUSTER_TRES, IMAGEN, telemetria=True),
+    }
+    assert any(item["metadata"]["name"] == "jaeger" for item in datos["items"])
+
+
+def test_cli_clientes_con_telemetria_termina_con_error():
+    err = io.StringIO()
+    with redirect_stderr(err):
+        try:
+            main(["--clientes", "192.168.0.11", "--telemetria"])
+        except SystemExit as salida:
+            assert salida.code != 0
+        else:
+            raise AssertionError("--clientes con --telemetria tendria que haber terminado con SystemExit")
+    linea_error = err.getvalue().strip().splitlines()[-1]
+    assert "--telemetria" in linea_error and "--imagen" in linea_error

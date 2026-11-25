@@ -827,7 +827,7 @@ Cuando lo que se agrega es una fase entera, sus issues van en su fase y acá que
 | #12 | Contexto entre nodos e hilos (extra) | ✅ |
 | #13 | Contexto cliente → nodo (extra) | ✅ |
 | #14 | *Spans* de dominio (extra) | ✅ |
-| #15 | Jaeger en compose y k3s (extra) | ⏳ |
+| #15 | Jaeger en compose y k3s (extra) | ✅ |
 | #16 | Experimentos con trazas (extra) | ⏳ |
 | #26 | Métricas de dominio (extra) | ⏳ |
 | #27 | Logs correlacionados con las trazas (extra) | ⏳ |

@@ -2,6 +2,7 @@
 # Varias compus: .env con las IPs (ver .env.ejemplo) y en cada una
 #                docker compose up --build nodoN
 # Jugar:         docker compose run --rm cliente <nombre>
+# Trazas:        OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318 docker compose --profile telemetria up --build
 name: trucardo
 
 x-entorno: &entorno
@@ -9,6 +10,7 @@ x-entorno: &entorno
   TRUCARDO_NODOS: "1@${IP_NODO1:-nodo1}:9501:9601,2@${IP_NODO2:-nodo2}:9502:9602,3@${IP_NODO3:-nodo3}:9503:9603"
   PUNTOS: ${PUNTOS:-15}
   LOG_NIVEL: ${LOG_NIVEL:-INFO}
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
 
 x-app: &app
   build: .
@@ -75,6 +77,11 @@ services:
   demo:
     <<: *herramienta
     entrypoint: ["python", "demo.py"]
+
+  jaeger:
+    image: jaegertracing/jaeger:2.23.0
+    profiles: [telemetria]
+    ports: ["16686:16686", "4318:4318"]
 
 volumes:
   datos1: {}
