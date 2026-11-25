@@ -28,7 +28,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(last_over_time(trucardo_primario[15s]))"
+          "expr": "sum(max by (trucardo_nodo) (last_over_time(trucardo_primario[10s])))"
         }
       ],
       "fieldConfig": {
@@ -61,7 +61,8 @@
           ]
         }
       },
-      "id": 1
+      "id": 1,
+      "interval": "5s"
     },
     {
       "type": "timeseries",
@@ -83,7 +84,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "last_over_time(trucardo_primario[15s])",
+          "expr": "max by (trucardo_nodo) (last_over_time(trucardo_primario[10s]))",
           "legendFormat": "N{{trucardo_nodo}}"
         }
       ],
@@ -97,7 +98,8 @@
         },
         "overrides": []
       },
-      "id": 2
+      "id": 2,
+      "interval": "5s"
     },
     {
       "type": "timeseries",
@@ -119,7 +121,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "last_over_time(trucardo_epoca[15s])",
+          "expr": "max by (trucardo_nodo) (last_over_time(trucardo_epoca[10s]))",
           "legendFormat": "N{{trucardo_nodo}}"
         }
       ],
@@ -131,7 +133,8 @@
         },
         "overrides": []
       },
-      "id": 3
+      "id": 3,
+      "interval": "5s"
     },
     {
       "type": "timeseries",
@@ -153,7 +156,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "last_over_time(trucardo_backup_atraso[15s])",
+          "expr": "max by (trucardo_nodo, backup) (last_over_time(trucardo_backup_atraso[10s]))",
           "legendFormat": "N{{trucardo_nodo}} → N{{backup}}"
         }
       ],
@@ -165,7 +168,8 @@
         },
         "overrides": []
       },
-      "id": 4
+      "id": 4,
+      "interval": "5s"
     },
     {
       "type": "timeseries",
@@ -200,7 +204,8 @@
         },
         "overrides": []
       },
-      "id": 5
+      "id": 5,
+      "interval": "5s"
     },
     {
       "type": "timeseries",
@@ -235,7 +240,8 @@
         },
         "overrides": []
       },
-      "id": 6
+      "id": 6,
+      "interval": "5s"
     },
     {
       "type": "timeseries",
@@ -269,7 +275,8 @@
         },
         "overrides": []
       },
-      "id": 7
+      "id": 7,
+      "interval": "5s"
     },
     {
       "type": "logs",
