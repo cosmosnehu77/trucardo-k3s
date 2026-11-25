@@ -19,6 +19,10 @@ _DESPLAZAMIENTO_NODEPORT = 21000
 _PROBE_FALLAS = 3
 _TOLERANCIA_SEGUNDOS = 10
 
+_VOLUMEN_DATOS = "datos"
+_DIRECTORIO_DATOS = "/datos"
+_DATOS_EN_LA_MAQUINA = "/var/lib/trucardo"
+
 
 def _validar_host(host):
     if len(host) > _LARGO_MAXIMO_HOST or not _NOMBRE_SERVICIO.fullmatch(host):
@@ -48,6 +52,10 @@ def _etiquetas(nodo):
 
 def _puertos(nodo):
     return {"pyro": nodo.puerto_pyro, "cluster": nodo.puerto_cluster}
+
+
+def _ruta_datos(nodo):
+    return f"{_DATOS_EN_LA_MAQUINA}/nodo{nodo.id_nodo}"
 
 
 def _probe(nodo):
@@ -108,15 +116,30 @@ def _deployment(nodo, texto_nodos, imagen):
                 "spec": {
                     "tolerations": _tolerancias(),
                     "affinity": _anti_afinidad(),
+                    "volumes": [
+                        {
+                            "name": _VOLUMEN_DATOS,
+                            "hostPath": {
+                                "path": _ruta_datos(nodo),
+                                "type": "DirectoryOrCreate",
+                            },
+                        }
+                    ],
                     "containers": [
                         {
                             "name": "nodo",
                             "image": imagen,
                             "imagePullPolicy": "IfNotPresent",
                             "command": ["python", "-m", "nodo.servidor", str(nodo.id_nodo)],
-                            "env": [{"name": "TRUCARDO_NODOS", "value": texto_nodos}],
+                            "env": [
+                                {"name": "TRUCARDO_NODOS", "value": texto_nodos},
+                                {"name": "TRUCARDO_DATOS", "value": _DIRECTORIO_DATOS},
+                            ],
                             "ports": [{"name": nombre, "containerPort": puerto}
                                       for nombre, puerto in _puertos(nodo).items()],
+                            "volumeMounts": [
+                                {"name": _VOLUMEN_DATOS, "mountPath": _DIRECTORIO_DATOS}
+                            ],
                             "livenessProbe": _probe(nodo),
                         }
                     ],

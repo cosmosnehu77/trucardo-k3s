@@ -4,17 +4,22 @@
 # Jugar:         docker compose run --rm cliente <nombre>
 name: trucardo
 
+x-entorno: &entorno
+  # sin .env, los nombres de servicio; con .env, las IPs de cada compu
+  TRUCARDO_NODOS: "1@${IP_NODO1:-nodo1}:9501:9601,2@${IP_NODO2:-nodo2}:9502:9602,3@${IP_NODO3:-nodo3}:9503:9603"
+  PUNTOS: ${PUNTOS:-15}
+  LOG_NIVEL: ${LOG_NIVEL:-INFO}
+
 x-app: &app
   build: .
   image: trucardo:local
-  environment:
-    # sin .env, los nombres de servicio; con .env, las IPs de cada compu
-    TRUCARDO_NODOS: "1@${IP_NODO1:-nodo1}:9501:9601,2@${IP_NODO2:-nodo2}:9502:9602,3@${IP_NODO3:-nodo3}:9503:9603"
-    PUNTOS: ${PUNTOS:-15}
-    LOG_NIVEL: ${LOG_NIVEL:-INFO}
+  environment: *entorno
 
 x-nodo: &nodo
   <<: *app
+  environment:
+    <<: *entorno
+    TRUCARDO_DATOS: &datos /datos
   restart: "no"     # si lo matan queda muerto hasta docker compose start
 
 x-herramienta: &herramienta
@@ -26,16 +31,28 @@ services:
     <<: *nodo
     command: ["python", "-m", "nodo.servidor", "1"]
     ports: ["9501:9501", "9601:9601"]
+    volumes:
+      - type: volume
+        source: datos1
+        target: *datos
 
   nodo2:
     <<: *nodo
     command: ["python", "-m", "nodo.servidor", "2"]
     ports: ["9502:9502", "9602:9602"]
+    volumes:
+      - type: volume
+        source: datos2
+        target: *datos
 
   nodo3:
     <<: *nodo
     command: ["python", "-m", "nodo.servidor", "3"]
     ports: ["9503:9503", "9603:9603"]
+    volumes:
+      - type: volume
+        source: datos3
+        target: *datos
 
   cliente:
     <<: *herramienta
@@ -58,3 +75,8 @@ services:
   demo:
     <<: *herramienta
     entrypoint: ["python", "demo.py"]
+
+volumes:
+  datos1: {}
+  datos2: {}
+  datos3: {}
