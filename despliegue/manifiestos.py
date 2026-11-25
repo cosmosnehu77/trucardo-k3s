@@ -28,6 +28,10 @@ _TOLERANCIA_SEGUNDOS = 10
 _VOLUMEN_DATOS = "datos"
 _DIRECTORIO_DATOS = "/datos"
 _DATOS_EN_LA_MAQUINA = "/var/lib/trucardo"
+_ALMACENAMIENTO_HOSTPATH = "hostpath"
+_ALMACENAMIENTO_LONGHORN = "longhorn"
+_ALMACENAMIENTOS = (_ALMACENAMIENTO_HOSTPATH, _ALMACENAMIENTO_LONGHORN)
+_TAMANO_PVC = "1Gi"
 
 IMAGEN_JAEGER = "jaegertracing/jaeger:2.23.0"
 IMAGEN_COLLECTOR = "otel/opentelemetry-collector:0.165.0"
@@ -165,6 +169,41 @@ def _ruta_datos(nodo):
     return f"{_DATOS_EN_LA_MAQUINA}/nodo{nodo.id_nodo}"
 
 
+def _nombre_pvc(nodo):
+    return f"{_VOLUMEN_DATOS}-nodo{nodo.id_nodo}"
+
+
+def _volumen_datos(nodo, almacenamiento):
+    if almacenamiento == _ALMACENAMIENTO_LONGHORN:
+        return {
+            "name": _VOLUMEN_DATOS,
+            "persistentVolumeClaim": {"claimName": _nombre_pvc(nodo)},
+        }
+    return {
+        "name": _VOLUMEN_DATOS,
+        "hostPath": {
+            "path": _ruta_datos(nodo),
+            "type": "DirectoryOrCreate",
+        },
+    }
+
+
+def _pvc(nodo):
+    return {
+        "apiVersion": "v1",
+        "kind": "PersistentVolumeClaim",
+        "metadata": {
+            "name": _nombre_pvc(nodo),
+            "labels": _etiquetas(nodo),
+        },
+        "spec": {
+            "accessModes": ["ReadWriteOnce"],
+            "storageClassName": _ALMACENAMIENTO_LONGHORN,
+            "resources": {"requests": {"storage": _TAMANO_PVC}},
+        },
+    }
+
+
 def _probe(nodo):
     # Trucardo decide primero y Kubernetes repara despues (D7).
     periodo = int(config.TIMEOUT_CAIDO // _PROBE_FALLAS) + 1
@@ -231,7 +270,14 @@ def _env_telemetria():
     ]
 
 
-def _deployment(nodo, ordenados, texto_nodos, imagen, telemetria=False):
+def _deployment(
+    nodo,
+    ordenados,
+    texto_nodos,
+    imagen,
+    telemetria=False,
+    almacenamiento=_ALMACENAMIENTO_HOSTPATH,
+):
     host_aliases = [
         {"ip": ip_servicio(n), "hostnames": [n.host]}
         for n in ordenados
@@ -260,15 +306,7 @@ def _deployment(nodo, ordenados, texto_nodos, imagen, telemetria=False):
                     "hostAliases": host_aliases,
                     "tolerations": _tolerancias(),
                     "affinity": _anti_afinidad(),
-                    "volumes": [
-                        {
-                            "name": _VOLUMEN_DATOS,
-                            "hostPath": {
-                                "path": _ruta_datos(nodo),
-                                "type": "DirectoryOrCreate",
-                            },
-                        }
-                    ],
+                    "volumes": [_volumen_datos(nodo, almacenamiento)],
                     "containers": [
                         {
                             "name": "nodo",
@@ -410,14 +448,27 @@ def _service_observabilidad(servicio):
     }
 
 
-def manifiestos(texto_nodos, imagen, telemetria=False):
+def manifiestos(texto_nodos, imagen, telemetria=False, almacenamiento=_ALMACENAMIENTO_HOSTPATH):
+    if almacenamiento not in _ALMACENAMIENTOS:
+        raise ValueError(f"almacenamiento desconocido: {almacenamiento!r}")
     ordenados = _nodos_ordenados(texto_nodos)
     for nodo in ordenados:
         _validar_host(nodo.host)
 
     objetos = []
     for nodo in ordenados:
-        objetos.append(_deployment(nodo, ordenados, texto_nodos, imagen, telemetria=telemetria))
+        if almacenamiento == _ALMACENAMIENTO_LONGHORN:
+            objetos.append(_pvc(nodo))
+        objetos.append(
+            _deployment(
+                nodo,
+                ordenados,
+                texto_nodos,
+                imagen,
+                telemetria=telemetria,
+                almacenamiento=almacenamiento,
+            )
+        )
         objetos.append(_service(nodo))
     if telemetria:
         for servicio in _OBSERVABILIDAD:
@@ -447,16 +498,29 @@ def main(argv=None):
         action="store_true",
         help="Agrega la pila de observabilidad OpenTelemetry",
     )
+    parser.add_argument(
+        "--almacenamiento",
+        choices=_ALMACENAMIENTOS,
+        default=None,
+        help="Tipo de almacenamiento de datos por nodo (por defecto: hostpath)",
+    )
     args = parser.parse_args(argv)
 
     if args.telemetria and args.clientes is not None:
         parser.error("--telemetria solo se puede usar con --imagen")
+    if args.almacenamiento is not None and args.clientes is not None:
+        parser.error("--almacenamiento solo se puede usar con --imagen")
 
     try:
         if args.clientes is not None:
             salida = texto_clientes(config.texto_nodos(), args.clientes)
         else:
-            items = manifiestos(config.texto_nodos(), args.imagen, telemetria=args.telemetria)
+            items = manifiestos(
+                config.texto_nodos(),
+                args.imagen,
+                telemetria=args.telemetria,
+                almacenamiento=args.almacenamiento or _ALMACENAMIENTO_HOSTPATH,
+            )
             salida = json.dumps({"apiVersion": "v1", "kind": "List", "items": items}, indent=2)
     except ValueError as error:
         sys.exit(str(error))

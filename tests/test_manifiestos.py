@@ -615,3 +615,129 @@ def test_cli_clientes_con_telemetria_termina_con_error():
             raise AssertionError("--clientes con --telemetria tendria que haber terminado con SystemExit")
     linea_error = err.getvalue().strip().splitlines()[-1]
     assert "--telemetria" in linea_error and "--imagen" in linea_error
+
+
+def test_con_longhorn_emite_un_pvc_por_nodo_y_ningun_hostpath():
+    objetos = manifiestos(CLUSTER_TRES, IMAGEN, almacenamiento="longhorn")
+    pvcs = _por_tipo(objetos, "PersistentVolumeClaim")
+    deployments = _por_tipo(objetos, "Deployment")
+
+    assert len(pvcs) == 3
+    assert len(deployments) == 3
+    for i, (pvc, d) in enumerate(zip(pvcs, deployments), start=1):
+        nombre_pvc = f"datos-nodo{i}"
+        assert pvc["apiVersion"] == "v1"
+        assert pvc["metadata"] == {
+            "name": nombre_pvc,
+            "labels": {"app": "trucardo", "nodo": str(i)},
+        }
+        assert pvc["spec"] == {
+            "accessModes": ["ReadWriteOnce"],
+            "storageClassName": "longhorn",
+            "resources": {"requests": {"storage": "1Gi"}},
+        }
+        assert objetos.index(pvc) < objetos.index(d)
+
+        volumenes = d["spec"]["template"]["spec"]["volumes"]
+        assert volumenes == [
+            {"name": "datos", "persistentVolumeClaim": {"claimName": nombre_pvc}}
+        ]
+        assert all("hostPath" not in v for v in volumenes)
+
+
+def test_con_longhorn_el_punto_de_montaje_es_el_mismo_que_con_hostpath():
+    deps_hostpath = _por_tipo(manifiestos(CLUSTER_TRES, IMAGEN), "Deployment")
+    deps_longhorn = _por_tipo(
+        manifiestos(CLUSTER_TRES, IMAGEN, almacenamiento="longhorn"), "Deployment"
+    )
+
+    assert len(deps_longhorn) == len(deps_hostpath) == 3
+    for dh, dl in zip(deps_hostpath, deps_longhorn):
+        ch = dh["spec"]["template"]["spec"]["containers"][0]
+        cl = dl["spec"]["template"]["spec"]["containers"][0]
+        assert cl["volumeMounts"] == ch["volumeMounts"]
+        env_h = {e["name"]: e["value"] for e in ch["env"]}
+        env_l = {e["name"]: e["value"] for e in cl["env"]}
+        assert env_l["TRUCARDO_DATOS"] == env_h["TRUCARDO_DATOS"]
+        assert cl["volumeMounts"][0]["mountPath"] == env_l["TRUCARDO_DATOS"]
+
+
+def test_con_longhorn_y_telemetria_combina_pvc_y_observabilidad():
+    objetos = manifiestos(CLUSTER_TRES, IMAGEN, telemetria=True, almacenamiento="longhorn")
+    pvcs = _por_tipo(objetos, "PersistentVolumeClaim")
+    deployments = _por_tipo(objetos, "Deployment")
+
+    assert len(pvcs) == 3
+    assert len(deployments) == 3 + len(OBSERVABILIDAD_ESPERADA)
+    assert set(OBSERVABILIDAD_ESPERADA) <= {d["metadata"]["name"] for d in deployments}
+    for d in deployments:
+        for volumen in d["spec"]["template"]["spec"].get("volumes", []):
+            assert "hostPath" not in volumen
+
+
+def test_sin_almacenamiento_la_salida_es_identica_a_hostpath():
+    assert manifiestos(CLUSTER_TRES, IMAGEN) == manifiestos(
+        CLUSTER_TRES, IMAGEN, almacenamiento="hostpath"
+    )
+    assert manifiestos(CLUSTER_TRES, IMAGEN, telemetria=True) == manifiestos(
+        CLUSTER_TRES, IMAGEN, telemetria=True, almacenamiento="hostpath"
+    )
+
+    sin_opcion = io.StringIO()
+    con_hostpath = io.StringIO()
+    with _entorno(TRUCARDO_NODOS=CLUSTER_TRES):
+        with redirect_stdout(sin_opcion):
+            main(["--imagen", IMAGEN])
+        with redirect_stdout(con_hostpath):
+            main(["--imagen", IMAGEN, "--almacenamiento", "hostpath"])
+    assert sin_opcion.getvalue() == con_hostpath.getvalue()
+
+
+def test_cli_con_almacenamiento_longhorn_imprime_json_con_pvcs():
+    buffer = io.StringIO()
+    with _entorno(TRUCARDO_NODOS=CLUSTER_TRES):
+        with redirect_stdout(buffer):
+            main(["--imagen", IMAGEN, "--almacenamiento", "longhorn"])
+
+    datos = json.loads(buffer.getvalue())
+    assert datos == {
+        "apiVersion": "v1",
+        "kind": "List",
+        "items": manifiestos(CLUSTER_TRES, IMAGEN, almacenamiento="longhorn"),
+    }
+
+
+def test_almacenamiento_desconocido_da_error():
+    try:
+        manifiestos(CLUSTER_TRES, IMAGEN, almacenamiento="nfs")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("almacenamiento desconocido tendria que haber dado ValueError")
+
+    err = io.StringIO()
+    with redirect_stderr(err):
+        try:
+            main(["--imagen", IMAGEN, "--almacenamiento", "nfs"])
+        except SystemExit as salida:
+            assert salida.code != 0
+        else:
+            raise AssertionError("--almacenamiento nfs tendria que haber terminado con SystemExit")
+    linea_error = err.getvalue().strip().splitlines()[-1]
+    assert "hostpath" in linea_error and "longhorn" in linea_error
+
+
+def test_cli_clientes_con_almacenamiento_termina_con_error():
+    for valor in ("hostpath", "longhorn"):
+        err = io.StringIO()
+        with redirect_stderr(err):
+            try:
+                main(["--clientes", "192.168.0.11", "--almacenamiento", valor])
+            except SystemExit as salida:
+                assert salida.code != 0
+            else:
+                raise AssertionError(
+                    f"--clientes con --almacenamiento {valor} tendria que haber terminado con SystemExit"
+                )
+        linea_error = err.getvalue().strip().splitlines()[-1]
+        assert "--almacenamiento" in linea_error and "--imagen" in linea_error

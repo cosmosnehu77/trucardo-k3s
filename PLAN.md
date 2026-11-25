@@ -853,7 +853,7 @@ Cuando lo que se agrega es una fase entera, sus issues van en su fase y acá que
 | #28 | Collector, Prometheus, Loki y Grafana (extra) | ✅ |
 | #29 | Experimentos con métricas y logs (extra) | ✅ |
 | #67 | El atraso de un backup se mide mal: desde la op 0 si no se lo conoce, y con latidos viejos | ✅ |
-| #30 | Volumen replicado con Longhorn (opcional) | ⏳ |
+| #30 | Volumen replicado con Longhorn (opcional) | 🟡 generador hecho; falta probarlo en máquinas reales |
 | #31 | Experimentos: el nodo se muda con su disco (opcional) | ⏳ |
 | #17 | README final y prueba limpia | ✅ |
 | #18 | Test de membresía intermitente | ✅ |
