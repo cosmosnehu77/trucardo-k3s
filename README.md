@@ -11,7 +11,7 @@ Además:
 - **Fase recomendada:** cada nodo guarda su log en un **volumen**, así un apagón de las tres máquinas no pierde las partidas.
 - **Fases extra:** observabilidad con **OpenTelemetry** (trazas en Jaeger, métricas y logs en Grafana) y almacenamiento replicado con **Longhorn**, para que el nodo se mude de máquina con su disco.
 
-**Estado (25/11/2026).** Están hechas la fase de despliegue, la recomendada (log en disco) y la de OpenTelemetry (trazas, métricas y logs). Falta la fase opcional de Longhorn (#30 y #31): queda como trabajo futuro (ver [Límites](#límites-y-trabajo-futuro)). El detalle está en la tabla de estado al final de [PLAN.md](PLAN.md).
+**Estado (25/11/2026).** Están hechas la fase de despliegue, la recomendada (log en disco) y la de OpenTelemetry (trazas, métricas y logs). De la fase opcional de Longhorn está el generador (`--almacenamiento longhorn`, #30), sin probar en un cluster. Los experimentos (#31) quedan como trabajo futuro (ver [Límites](#límites-y-trabajo-futuro)). El detalle está en la tabla de estado al final de [PLAN.md](PLAN.md).
 
 ## Arquitectura: dos capas
 
@@ -329,6 +329,39 @@ Para ver quién es el primario:
 docker run --rm -it --network host -e TRUCARDO_NODOS="<valor>" trucardo:local python -m cliente.quien_es
 ```
 
+### Opcional: volumen replicado con Longhorn
+
+> [!WARNING]
+> **Sin probar.** El generador está testeado, pero Longhorn no corre en el cluster local (ver [Límites](#límites-y-trabajo-futuro)), y todavía no se probó en máquinas reales.
+
+Con Longhorn, cada nodo guarda su log en un volumen replicado en las tres máquinas, que viaja con el Pod si se muda. Longhorn necesita `open-iscsi` en cada máquina. En Debian o Ubuntu, en las tres:
+
+```bash
+sudo apt install -y open-iscsi && sudo systemctl enable --now iscsid && sudo modprobe iscsi_tcp
+```
+
+En `maquina1`, instalá Longhorn (versión fija, D17) y esperá a que todos sus Pods estén `Running`:
+
+```bash
+sudo k3s kubectl apply -f https://raw.githubusercontent.com/longhorn/longhorn/v1.13.0/deploy/longhorn.yaml
+```
+
+```bash
+sudo k3s kubectl -n longhorn-system get pods
+```
+
+Hacé que, si se apaga una máquina, Longhorn borre el Pod de un Deployment y libere su volumen. Si no, el Pod nuevo no puede montarlo en otra máquina:
+
+```bash
+sudo k3s kubectl -n longhorn-system patch settings.longhorn.io node-down-pod-deletion-policy --type merge -p '{"value":"delete-both-statefulset-and-deployment-pod"}'
+```
+
+En la compu de armado, generá los manifiestos con `--almacenamiento longhorn` (un PVC por nodo en lugar del `hostPath`) y aplicalos como en el paso 7:
+
+```bash
+TRUCARDO_NODOS="1@nodo1:9501:9601,2@nodo2:9502:9602,3@nodo3:9503:9603" python3 -m despliegue.manifiestos --imagen trucardo:local --almacenamiento longhorn > trucardo.json
+```
+
 ### 9. Desinstalar
 
 En `maquina1`:
@@ -373,7 +406,7 @@ sudo rm -rf /var/lib/trucardo
 
 - **Sin quórum, una partición deja dos primarios** (casos 7, 15 y 17). Las épocas lo resuelven al curarse, pero las ops que el primario viejo confirmó solo se pierden (caso 11). Evitarlo pide confirmar sólo con la mayoría, como Raft.
 - **Después de un apagón, el primero en volver se corona solo** (caso 10). Si es un backup atrasado, los que vuelven después pierden lo que él no tenía. Es el mismo límite.
-- **El disco es de la máquina, no del nodo** (D14). Un nodo que se muda arranca con lo que haya en la máquina nueva y se pone al día por la red. La fase de Longhorn (#30 y #31) iba a mostrar la alternativa: un volumen replicado que viaja con el Pod. No se hizo: el cluster local no puede correrlo (la imagen de k3s no trae `open-iscsi`), y hacía falta probarlo en máquinas reales.
+- **El disco es de la máquina, no del nodo** (D14). Un nodo que se muda arranca con lo que haya en la máquina nueva y se pone al día por la red. La fase de Longhorn iba a mostrar la alternativa: un volumen replicado que viaja con el Pod. El generador ya lo arma (#30), pero falta probarlo y comparar (#31). En el cluster local no se puede: Longhorn expone cada volumen por iSCSI, y el iniciador iSCSI del kernel sólo funciona en la red del host, no en la de un contenedor. Hace falta probarlo en máquinas reales o en VMs.
 - **Kubernetes no detecta un nodo colgado** (caso 2). La *probe* TCP la contesta el kernel. Trucardo lo resuelve con sus latidos.
 - **Los clientes entran por la IP de una máquina.** Si esa máquina se apaga, hay que cambiar de IP (caso 6).
 - **La telemetría guarda su historia en el Pod.** Si Prometheus, Loki o Jaeger se mudan de máquina, se pierde. Una partición también corta la telemetría del lado aislado (caso 15).
