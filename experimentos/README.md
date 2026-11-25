@@ -45,7 +45,7 @@ $C exec -T maquina3 ps -eo pid,args | grep "nodo.servidor 2"
   ```
 
   El número final es lo que tardó la jugada, contando los reintentos del cliente. Jugando a mano se ve lo mismo, pero más lento.
-- Desde la #24 cada nodo guarda su log en el disco de su máquina, en `/var/lib/trucardo/nodo<id>`. Los casos de esta parte no dependen de eso. Los de persistencia se agregan con la #25.
+- Desde la #24 cada nodo guarda su log en el disco de su máquina, en `/var/lib/trucardo/nodo<id>`. Los casos 1 a 7 no dependen de eso. Los casos 8 a 11, de [persistencia](#persistencia), lo usan a propósito.
 
 ---
 
@@ -346,7 +346,7 @@ $C exec maquina2 crictl ps → trucardo-nodo2-…-tkwr6  Running   ← el viejo 
 07:56:52 bot-a, beto: tira 3 de espada (primario N3, 0.0 s)
 ```
 
-Después de la partición, el disco que N2 dejó en `maquina2` todavía tiene esas 14 operaciones de la época 6, que nadie más tiene. Lo que pasa con ellas es un caso de la #25.
+Después de la partición, el disco que N2 dejó en `maquina2` todavía tiene esas 14 operaciones de la época 6, que nadie más tiene. Lo que pasa con ellas es el [caso 9](#9-un-nodo-que-se-muda-de-máquina).
 
 **Por qué.**
 
@@ -354,3 +354,168 @@ Después de la partición, el disco que N2 dejó en `maquina2` todavía tiene es
 - **Kubernetes empeora el problema.** El servidor deja de oír al kubelet de `maquina2`, la marca `NotReady` y crea otro N2 en `maquina3`. No puede matar al viejo, porque el kubelet que lo haría está del otro lado. Quedan **dos procesos con el id 2**, que `Recreate` (D3) evita en todos los demás casos. Por eso un StatefulSet espera a que la máquina vuelva (D4): prefiere no tener el nodo antes que tenerlo dos veces.
 - **Al curarse, gana la época mayor.** El kubelet de `maquina2` se entera de que su Pod fue borrado y lo mata. `bot-a` vuelve a la mayoría, y sus jugadas de la época 6 ya no existen: su jugador ve otras cartas en la mano («no tiene 12 de oro»).
 - **Es el mismo problema que el caso 6**, pero causado por la red. Las épocas evitan que el primario viejo siga mandando después de curarse la partición, pero no que confirme jugadas mientras dura. Resolverlo exige quórum: no confirmar sin la mayoría (Raft, Paxos). Es la frontera del modelo primario-backup.
+
+---
+
+## Persistencia
+
+Desde la #22, cada nodo guarda en disco cada operación antes de confirmarla, y también su época. Desde la #24, ese disco es un `hostPath` en la máquina donde corre el Pod: `/var/lib/trucardo/nodo<id>`. Estos casos muestran qué cambia eso, y hasta dónde llega.
+
+Para ver qué tiene cada máquina en disco:
+
+```bash
+for m in maquina1 maquina2 maquina3; do $C exec -T $m sh -c 'for d in /var/lib/trucardo/nodo*; do [ -d "$d" ] && echo "$d ops=$(cat $d/ops.jsonl 2>/dev/null | wc -l) epoca=$(cat $d/epoca 2>/dev/null || echo 0)"; done' | sed "s/^/$m /"; done
+```
+
+Un nodo que todavía no jugó ninguna operación, o que nunca cambió de época, no tiene esos archivos: el comando muestra 0.
+
+## 8. Reiniciar un backup
+
+**Guion.** Matá el proceso de un backup (N1, en `maquina3`). Kubernetes reinicia el contenedor en el mismo Pod, y por lo tanto en la misma máquina:
+
+```bash
+$C exec -T maquina3 kill -INT <pid>
+```
+
+**Qué se espera.** El nodo vuelve con su log y su época, y la puesta al día empieza en su última operación, no en la 0.
+
+**Evidencia.**
+
+```
+07:58:21 kill -INT (N1, backup, en maquina3)
+07:58:22 [N1│BACKUP│e=7] escuchando en PYRO:truco@…:9501         ← ya en la época 7
+07:58:22 [N1│BACKUP│e=7] N3 es el primario de la epoca 7
+07:58:22 [N3│PRIMARIO│e=7] N1 esta en la op 964 y yo en la 966: le mando las 2 que le faltan
+07:58:22 [N3│PRIMARIO│e=7] N1 quedo al dia en la op 966
+
+quien_es → 1 BACKUP e=7 979 | 2 BACKUP e=7 979 | 3 PRIMARIO e=7 979
+k get pods → trucardo-nodo1-…-qxzk2  maquina3  RESTARTS 1
+```
+
+**Por qué.**
+
+- **Al arrancar, el nodo lee su disco antes de atender nada** (#22): tiene la época 7 y las 964 operaciones desde la primera línea del log.
+- **El primario sólo le manda lo que falta** (#23). Compara la punta del backup, la época y el número de su última op, con su propio log. Como coincide, sigue desde ahí: le manda 2 operaciones y no 966.
+- **Kubernetes reinicia el contenedor, no el Pod.** El Pod sigue en la misma máquina, y el `hostPath` monta el mismo directorio.
+
+## 9. Un nodo que se muda de máquina
+
+**Guion.** Borrá el Pod de un nodo para que Kubernetes lo cree en otra máquina. Si la anti-afinidad no lo manda a la que querés, acordoná las otras con `k cordon <maquina>` y después `k uncordon <maquina>`.
+
+```bash
+k delete pod -l nodo=2
+```
+
+**Qué se espera.** El nodo arranca con lo que haya en `/var/lib/trucardo/nodo2` **de la máquina nueva** y se pone al día por la red:
+
+- si no hay nada, arranca vacío y recibe todo, como en los casos 3 y 4;
+- si hay un log viejo que coincide con el del primario, recibe sólo lo que sigue, como N3 en el caso 5;
+- si hay un log viejo que **diverge**, lo recorta y recibe el resto.
+
+La corrida muestra el tercer caso. En `maquina2` había quedado el log del N2 que estuvo aislado en la partición del caso 7, con 14 operaciones de la época 6 que nadie más tiene.
+
+**Evidencia.**
+
+```
+07:58:45 disco de nodo2 en maquina2: ops=726 epoca=6
+         la última línea: {"seq": 726, "epoca": 6, …}
+07:58:45 kubectl delete pod -l nodo=2           ← estaba en maquina3
+07:58:46 [N2│BACKUP│e=6] escuchando en PYRO:truco@…:9502         ← en maquina2, con ese log
+07:58:46 [N2│BACKUP│e=6] N3 es el primario de la epoca 7
+07:58:46 [N3│PRIMARIO│e=7] N2 entra a la vista (ultimo_seq 726)
+07:58:46 [N3│PRIMARIO│e=7] N2 diverge desde la op 1: recorta a la 0 y le mando 987
+07:58:46 [N2│BACKUP│e=7] recorto el log de la op 726 a la 712: diverge del primario
+07:58:47 [N3│PRIMARIO│e=7] N2 quedo al dia en la op 987
+
+quien_es → 1 BACKUP e=7 1000 | 2 BACKUP e=7 1000 | 3 PRIMARIO e=7 1000
+```
+
+**Por qué.**
+
+- **El disco es de la máquina, no del nodo.** Con `hostPath` (D14), un Pod que se muda encuentra lo que dejó ahí otra vez, aunque sea viejo. Un PVC de `local-path` evitaría eso, pero dejaría al Pod `Pending` mientras su máquina esté apagada.
+- **El primario no sabe dónde empieza la divergencia.** Sólo conoce la punta de N2, (6, 726), y en su log la op 726 es de la época 7. Le manda todo desde la op 0.
+- **El backup recorta sólo lo que difiere**, como en Raft. Las ops 1 a 712 eran iguales a las del primario y se quedan. Desde la 713 son las que el N2 aislado confirmó sin acks en el caso 7: se recortan, en disco y en memoria.
+- **Por eso los tres terminan con el mismo log.** Es el criterio de aceptación de la #23.
+
+## 10. Apagón total
+
+**Guion.** Con la partida en curso, apagá las tres máquinas a la vez y volvé a encenderlas:
+
+```bash
+$C stop -t 0
+```
+
+```bash
+$C start
+```
+
+**Qué se espera.** Las máquinas vuelven, Kubernetes vuelve a levantar los mismos Pods en las mismas máquinas, y cada nodo arranca con su disco. Gana la elección el que tiene el log más al día, y las partidas siguen donde estaban.
+
+**Evidencia.**
+
+```
+antes:    quien_es → 1 BACKUP e=9 1137 | 2 BACKUP e=9 1137 | 3 PRIMARIO e=9 1137
+08:01:23 leo: tira 6 de copa (primario N3, 0.0 s)
+08:01:24 beto: tira 6 de basto (primario N3, 0.0 s)
+08:01:24 docker compose stop (las tres máquinas)
+08:01:44 docker compose start
+08:01:51 leo: SIN SERVICIO: ningun nodo atendio en 25 s
+08:01:51 [N3│BACKUP│e=9] escuchando en PYRO:truco@…:9503          ← maquina1, el servidor
+08:01:53 [N3│BACKUP│e=9] arranco una eleccion (epoca_ultima 9, ultimo_seq 1139)
+08:01:54 [N3│BACKUP│e=9] nadie me gana (contestaron 0 de 2): me corono
+08:01:54 [N3│PRIMARIO│e=10] gano la eleccion: soy el primario de la epoca 10
+08:01:58 [N1│BACKUP│e=9] escuchando en PYRO:truco@…:9501          ← maquina3
+08:01:58 [N2│BACKUP│e=9] escuchando en PYRO:truco@…:9502          ← maquina2
+08:01:58 [N1│BACKUP│e=9] N3 es el primario de la epoca 10
+08:01:58 beto: tira 4 de espada (primario N3, 5.0 s)               ← la misma mesa
+08:02:13 quien_es → 1 BACKUP e=10 1157 | 2 BACKUP e=10 1157 | 3 PRIMARIO e=10 1157
+
+k get pods → los mismos tres Pods, en las mismas máquinas, con un reinicio más
+```
+
+**Por qué.**
+
+- **Las partidas sobreviven porque están en disco.** Sin persistencia (#22 y #24), los tres nodos habrían vuelto vacíos y las mesas se habrían perdido.
+- **Vuelven los mismos Pods.** El servidor de k3s también estaba apagado, así que nadie marcó las máquinas `NotReady` ni desalojó nada. Cada kubelet vuelve a levantar sus Pods, y cada Pod encuentra su disco.
+- **N3 ganó solo, y esta vez estaba bien.** Su Pod corre en `maquina1`, el servidor de k3s, que vuelve 7 s antes que los agentes. N3 se coronó sin rivales («contestaron 0 de 2»). Era el primario de antes del apagón y tenía el log al día, hasta la op 1139, igual que los backups. Nada se perdió.
+- **Sin quórum, el primero en volver manda.** Si el primero en volver hubiera sido un backup atrasado, también se habría coronado solo, en una época nueva. Los que llegaran después con más operaciones las recortarían, porque son de una época vieja que el primario nuevo no tiene. El criterio de la elección (el log más al día) sólo sirve entre los nodos que están para votar. Es el mismo límite del caso 11.
+
+## 11. Límite: una operación confirmada sin acks se pierde
+
+**Guion.** Aislá la máquina del primario (`maquina2`, con N2) durante unos 25 s, menos de lo que tarda Kubernetes en desalojar el Pod (casi un minuto, caso 3), con los dos jugadores de una partida entrando por esa máquina (`172.30.0.12`). En la corrida había además otra partida entrando por `maquina1`, como en el caso 7:
+
+```bash
+$C exec -T maquina2 sh -c 'for ip in 172.30.0.11 172.30.0.13; do iptables -I INPUT -s $ip -j DROP; iptables -I OUTPUT -d $ip -j DROP; done'
+```
+
+Después curá la partición, con el mismo comando y `-D` en lugar de `-I`.
+
+**Qué se espera.** Mientras dura la partición, N2 confirma jugadas sin acks y los otros dos eligen otro primario. Al curarse, N2 es el **mismo Pod**, con su disco: recorta lo que confirmó solo.
+
+**Evidencia.**
+
+```
+08:00:35 [N2│PRIMARIO│e=8] op 1087 · jugar · leo · … · la tienen 2/2 de los que contestaron
+08:00:35 particion corta: maquina2 (N2, primario) deja de hablar con maquina1 y maquina3
+08:00:39 [N2│PRIMARIO│e=8] op 1088 · jugar · leo · … · la tienen 0/0 de los que contestaron
+08:00:40 [N3│PRIMARIO│e=9] gano la eleccion: soy el primario de la epoca 9
+08:00:43 [N2│PRIMARIO│e=8] op 1089 · jugar · beto · … · la tienen 0/0 de los que contestaron
+08:00:53 [N2│PRIMARIO│e=8] op 1090 · cantar · beto · … · la tienen 0/0 de los que contestaron
+08:00:56 bot-a, beto: canta falta_envido (primario N2, 7.5 s)       ← confirmada
+08:01:00 se cura
+08:01:01 [N2│PRIMARIO│e=8] op 1091 · responder · leo · … · la tienen 0/0 de los que contestaron
+08:01:01 [N2│PRIMARIO│e=8] N1 me rechaza el latido: hay epoca 9 y yo estoy en la 8
+08:01:01 [N2│BACKUP│e=9] N3 es el primario de la epoca 9
+08:01:01 [N2│BACKUP│e=9] recorto el log de la op 1091 a la 1087: diverge del primario
+08:01:02 bot-a, leo: rechazada: no hay ningun canto para responder   ← la falta envido ya no existe
+
+k get pods → trucardo-nodo2-…-q8pxl  maquina2  RESTARTS 0          ← el mismo Pod
+```
+
+**Por qué.**
+
+- **El primario confirma aunque nadie tenga la operación** («0/0»). Es una decisión del Proyecto 1: prefiere seguir jugando a frenar.
+- **Al volver, gana la época mayor.** Las ops 1088 a 1091 son de la época 8, y el primario manda en la 9. En la corrida, el primario ya tenía otras ops en esas posiciones, pero el resultado sería el mismo sin ellas: después de lo recibido, un backup sólo conserva una cola de la época del primario que le manda (#23). N2 las recorta de memoria y de disco.
+- **El cliente lo ve.** Para `bot-a`, el `falta_envido` estaba confirmado. Después de la partición, la mesa no lo tiene.
+- **El disco no lo evita.** La operación estaba guardada en el disco de N2, y se perdió igual. Para no perderla, el primario tendría que confirmarla sólo cuando la tiene la mayoría (quórum, como en Raft). Es el mismo límite del cerebro dividido del caso 7.
+- **Con `kill -STOP` no se reproduce.** Se probó colgar a los dos backups, hacer jugadas y después colgar al primario. Los backups recibieron igual las operaciones confirmadas sin acks: el kernel guarda los mensajes mientras el proceso está detenido y se los entrega al reanudarlo. La pérdida aparece sólo si los mensajes se pierden de verdad, como en una partición.

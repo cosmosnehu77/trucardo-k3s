@@ -820,7 +820,7 @@ Cuando lo que se agrega es una fase entera, sus issues van en su fase y acá que
 | #22 | Log de operaciones en disco (recomendada) | ✅ |
 | #23 | Recuperación consistente desde el disco (recomendada) | ✅ |
 | #24 | Un volumen por nodo en compose y k3s (recomendada) | ✅ |
-| #25 | Experimentos de persistencia (recomendada) | ⏳ |
+| #25 | Experimentos de persistencia (recomendada) | ✅ |
 | #52 | Los nodos se encuentran sin depender del DNS del cluster | ⏳ |
 | #53 | Una elección tardía dispara otra aunque ya haya primario | ⏳ |
 | #11 | SDK de OpenTelemetry (extra) | ⏳ |
