@@ -12,13 +12,16 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 # una sola vez por proceso y haria que los tests dependan del orden.
 _proveedor = None
 
+# Pyro5 exige claves de 4 letras y valores bytes en annotations.
+CLAVE_TRAZA = "TRCP"
 
-def configurar(id_nodo, exportador=None):
+
+def configurar(servicio, exportador=None):
     global _proveedor
     cerrar()
     if exportador is None and not os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
         return
-    recurso = Resource.create({"service.name": f"trucardo-nodo{id_nodo}"})
+    recurso = Resource.create({"service.name": servicio})
     proveedor = TracerProvider(resource=recurso)
     destino = OTLPSpanExporter() if exportador is None else exportador
     proveedor.add_span_processor(BatchSpanProcessor(destino))
@@ -44,6 +47,21 @@ def inyectar(mensaje):
 
 def extraer(mensaje):
     return propagate.extract(mensaje)
+
+
+def anotaciones():
+    portador = {}
+    inyectar(portador)
+    traceparent = portador.get("traceparent")
+    return {CLAVE_TRAZA: traceparent.encode()} if traceparent else {}
+
+
+def de_anotaciones(anotaciones):
+    valor = anotaciones.get(CLAVE_TRAZA)
+    if not valor:
+        return extraer({})
+    # Pyro5 entrega un memoryview en el servidor.
+    return extraer({"traceparent": bytes(valor).decode()})
 
 
 def hilo(funcion, *args):

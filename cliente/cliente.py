@@ -7,7 +7,7 @@ from rich.console import Console
 
 from cliente import pantalla
 from cliente.conexion import Conexion, SinServicio
-from nodo import config
+from nodo import config, telemetria
 from nodo.lamport import Reloj
 
 TECLAS = {
@@ -97,13 +97,14 @@ class Cliente:
     def _enviar(self, que, dato):
         id_operacion = self._id_operacion()
         try:
-            if que == "jugar":
-                return self._llamar("jugar_carta", self.id_sesion, dato, id_operacion)
-            if que == "cantar":
-                return self._llamar("cantar", self.id_sesion, dato, id_operacion)
-            if que == "responder":
-                return self._llamar("responder", self.id_sesion, dato, id_operacion)
-            return self._llamar("irse_al_mazo", self.id_sesion, id_operacion)
+            with telemetria.tracer().start_as_current_span(f"jugada {que}"):
+                if que == "jugar":
+                    return self._llamar("jugar_carta", self.id_sesion, dato, id_operacion)
+                if que == "cantar":
+                    return self._llamar("cantar", self.id_sesion, dato, id_operacion)
+                if que == "responder":
+                    return self._llamar("responder", self.id_sesion, dato, id_operacion)
+                return self._llamar("irse_al_mazo", self.id_sesion, id_operacion)
         except ValueError as error:
             # la jugada ilegal: Pyro5 trae el mensaje del motor intacto
             self.consola.print(f"[bold red]✗[/] {error}")
@@ -185,6 +186,7 @@ def main():
     except ValueError as error:
         sys.exit(f"TRUCARDO_NODOS invalido: {error}")
 
+    telemetria.configurar(f"trucardo-cliente-{nombre}")
     cliente = Cliente(nodos)
     try:
         res = cliente.tengo_sesion_existente(nombre)
@@ -200,6 +202,8 @@ def main():
     except SinServicio as error:
         cliente.consola.print(pantalla.sin_servicio(error))
         sys.exit(1)
+    finally:
+        telemetria.cerrar()
 
 
 if __name__ == "__main__":

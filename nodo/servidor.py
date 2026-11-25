@@ -13,6 +13,8 @@ import threading
 import uuid
 
 import Pyro5.api
+import Pyro5.callcontext
+from opentelemetry import context
 
 from nodo import config, disco, registro, telemetria
 from nodo.cluster.protocolo import AL_DIA, ATRASADO, DUPLICADA, ILEGAL
@@ -188,34 +190,40 @@ class ServidorTruco:
         """Aplica y replica una operacion, y devuelve su sello. Si es un
         reintento (mismo id_operacion), devuelve el sello de la primera vez
         sin aplicarla de nuevo."""
-        with self.lock:
-            self.reloj.recibir(lamport)
-            self._exigir_primario()
-            if self.estado.ya_aplicada(id_sesion, id_operacion):
+        token = context.attach(
+            telemetria.de_anotaciones(Pyro5.callcontext.current_context.annotations)
+        )
+        try:
+            with self.lock:
+                self.reloj.recibir(lamport)
+                self._exigir_primario()
+                if self.estado.ya_aplicada(id_sesion, id_operacion):
+                    sesion = self.estado.sesion(id_sesion)
+                    log.info(f"reintento de {sesion.nombre} ({str(id_operacion)[:8]}): "
+                             f"ya estaba aplicada, no se aplica dos veces")
+                    return sesion.ultima_operacion[1]
+
+                op = {"seq": self.estado.ultimo_seq + 1, "epoca": self.epoca,
+                      "lamport": self.reloj.tic(), "tipo": tipo, "id_sesion": id_sesion,
+                      "id_operacion": id_operacion, "datos": datos}
+
+                self._aplicar(op)
+
+                replicas = ""
+                if self.__membresia is not None:
+                    respuestas = self.__membresia.replica.replicar(op)
+                    if self.rol != "primario":
+                        # replicando me entere de que ya no mando: no se confirma
+                        raise NoPrimario(None)
+                    al_dia = sum(1 for r in respuestas.values() if r.get("ok"))
+                    replicas = f" · la tienen {al_dia}/{len(respuestas)} de los que contestaron"
+
                 sesion = self.estado.sesion(id_sesion)
-                log.info(f"reintento de {sesion.nombre} ({str(id_operacion)[:8]}): "
-                         f"ya estaba aplicada, no se aplica dos veces")
-                return sesion.ultima_operacion[1]
-
-            op = {"seq": self.estado.ultimo_seq + 1, "epoca": self.epoca,
-                  "lamport": self.reloj.tic(), "tipo": tipo, "id_sesion": id_sesion,
-                  "id_operacion": id_operacion, "datos": datos}
-
-            self._aplicar(op)
-
-            replicas = ""
-            if self.__membresia is not None:
-                respuestas = self.__membresia.replica.replicar(op)
-                if self.rol != "primario":
-                    # replicando me entere de que ya no mando: no se confirma
-                    raise NoPrimario(None)
-                al_dia = sum(1 for r in respuestas.values() if r.get("ok"))
-                replicas = f" · la tienen {al_dia}/{len(respuestas)} de los que contestaron"
-
-            sesion = self.estado.sesion(id_sesion)
-            log.info(f"op {op['seq']} · {tipo} · {sesion.nombre} · "
-                     f"mesa {sesion.id_mesa}{replicas}")
-            return op["lamport"]
+                log.info(f"op {op['seq']} · {tipo} · {sesion.nombre} · "
+                         f"mesa {sesion.id_mesa}{replicas}")
+                return op["lamport"]
+        finally:
+            context.detach(token)
 
     # ---------- el otro lado: lo que me replica el primario ----------
 
@@ -298,7 +306,7 @@ def main():
         sys.exit(f"configuracion invalida: {error}")
     yo = cluster[id_nodo]
     registro.configurar(servidor)
-    telemetria.configurar(id_nodo)
+    telemetria.configurar(f"trucardo-nodo{id_nodo}")
 
     membresia = Membresia(servidor, cluster)
     servidor._set_membresia(membresia)
