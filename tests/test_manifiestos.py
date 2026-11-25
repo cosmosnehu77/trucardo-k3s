@@ -741,3 +741,78 @@ def test_cli_clientes_con_almacenamiento_termina_con_error():
                 )
         linea_error = err.getvalue().strip().splitlines()[-1]
         assert "--almacenamiento" in linea_error and "--imagen" in linea_error
+
+
+def test_sin_visor_no_hay_objetos_de_visor_ni_rbac():
+    objetos = manifiestos(CLUSTER_TRES, IMAGEN, telemetria=True)
+
+    assert "visor" not in _por_nombre(objetos, "Deployment")
+    assert not _por_tipo(objetos, "ServiceAccount")
+    assert not _por_tipo(objetos, "ClusterRole")
+
+
+def test_el_visor_lee_nodos_y_pods_con_una_cuenta_de_solo_lectura():
+    objetos = manifiestos(CLUSTER_TRES, IMAGEN, visor=True)
+
+    cuenta = _por_nombre(objetos, "ServiceAccount")["visor"]
+    rol = _por_nombre(objetos, "ClusterRole")["trucardo-visor"]
+    enlace = _por_nombre(objetos, "ClusterRoleBinding")["trucardo-visor"]
+    assert rol["rules"] == [{"apiGroups": [""], "resources": ["nodes", "pods"],
+                             "verbs": ["get", "list"]}]
+    assert enlace["roleRef"]["name"] == "trucardo-visor"
+    assert enlace["subjects"][0]["name"] == cuenta["metadata"]["name"]
+    assert enlace["subjects"][0]["namespace"] == "default"
+
+
+def test_el_visor_corre_en_la_imagen_de_trucardo_y_conoce_a_los_nodos():
+    objetos = manifiestos(CLUSTER_TRES, IMAGEN, visor=True)
+
+    pod = _por_nombre(objetos, "Deployment")["visor"]["spec"]["template"]["spec"]
+    contenedor = pod["containers"][0]
+    entorno = {e["name"]: e.get("value") for e in contenedor["env"]}
+    assert pod["serviceAccountName"] == "visor"
+    assert contenedor["image"] == IMAGEN
+    assert contenedor["command"] == ["python", "-m", "visor.servidor"]
+    assert entorno["TRUCARDO_NODOS"] == CLUSTER_TRES
+    assert "VISOR_JAEGER" not in entorno
+    assert {a["hostnames"][0] for a in pod["hostAliases"]} == {"nodo1", "nodo2", "nodo3"}
+    assert pod["tolerations"] == _por_nombre(objetos, "Deployment")["trucardo-nodo1"]["spec"]["template"]["spec"]["tolerations"]
+
+
+def test_el_visor_se_publica_por_nodeport_con_la_regla_de_puertos():
+    objetos = manifiestos(CLUSTER_TRES, IMAGEN, visor=True)
+
+    service = _por_nombre(objetos, "Service")["visor"]
+    assert service["spec"]["type"] == "NodePort"
+    assert service["spec"]["clusterIP"] == "10.43.0.95"
+    assert service["spec"]["ports"] == [
+        {"name": "web", "port": 9808, "targetPort": 9808, "nodePort": 30808}
+    ]
+
+
+def test_con_telemetria_el_visor_lee_las_trazas_de_jaeger():
+    objetos = manifiestos(CLUSTER_TRES, IMAGEN, telemetria=True, visor=True)
+
+    pod = _por_nombre(objetos, "Deployment")["visor"]["spec"]["template"]["spec"]
+    entorno = {e["name"]: e.get("value") for e in pod["containers"][0]["env"]}
+    assert entorno["VISOR_JAEGER"] == "http://jaeger:16686"
+    assert "jaeger" in {a["hostnames"][0] for a in pod["hostAliases"]}
+
+
+def test_cli_con_visor_imprime_json_con_el_visor():
+    with _entorno(TRUCARDO_NODOS=CLUSTER_TRES):
+        salida = io.StringIO()
+        with redirect_stdout(salida):
+            main(["--imagen", IMAGEN, "--visor"])
+    nombres = {obj["metadata"]["name"] for obj in json.loads(salida.getvalue())["items"]}
+    assert {"visor", "trucardo-visor"} <= nombres
+
+
+def test_cli_clientes_con_visor_termina_con_error():
+    with redirect_stderr(io.StringIO()):
+        try:
+            main(["--clientes", "192.168.0.11", "--visor"])
+        except SystemExit as salida:
+            assert salida.code != 0
+        else:
+            raise AssertionError("tenía que terminar con error")

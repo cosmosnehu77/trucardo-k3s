@@ -180,6 +180,16 @@ Después generá los manifiestos con `--telemetria` y aplicalos como antes. Qued
 
 Sin Kubernetes, `OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4318 docker compose --profile telemetria up --build` levanta lo mismo, con Grafana en <http://localhost:3000>.
 
+**Visor en vivo (opcional).** Con `--visor`, el generador suma un Pod que dibuja el cluster como una figura isométrica: las tres máquinas, el Pod de cada nodo con su rol, el plano de control, la red, los módulos de telemetría y los jugadores. Cada segundo lee la API de Kubernetes (con una cuenta de sólo lectura), le pregunta a cada nodo por sus mesas y, si hay telemetría, lee las trazas de Jaeger para dibujar los mensajes entre servicios. Sin telemetría, deduce los latidos, las réplicas y las jugadas del estado de los nodos. Un clic en cada pieza explica qué hace y muestra sus datos del momento.
+
+```bash
+TRUCARDO_NODOS="1@nodo1:9501:9601,2@nodo2:9502:9602,3@nodo3:9503:9603" python3 -m despliegue.manifiestos --imagen trucardo:local --telemetria --visor > trucardo.json
+```
+
+Después de aplicarlo, el visor queda en <http://172.30.0.11:30808>. Con `?demo` al final, la página simula un cluster (sin pedirle nada al servidor), y la máquina 3 se cae una vez por minuto. Para que los jugadores aparezcan en las trazas, corré el cliente con `-e OTEL_EXPORTER_OTLP_ENDPOINT=http://172.30.0.11:30318`.
+
+La figura se arma con el kit isométrico de [anatomy](https://github.com/wheresryan22/anatomy) (MIT, copiado en `visor/figura/kit/`). Si se cambia algo en `visor/figura/`, se regenera la página con `node visor/figura/build.mjs`, que escribe `visor/pagina/index.html`.
+
 Para consultar quién es el primario desde afuera:
 
 ```bash
@@ -427,4 +437,6 @@ Resumen de [PLAN.md](PLAN.md), sección 1:
 
 Basado en **Trucardo**, el Proyecto 1 de Sistemas Distribuidos 2026: el juego, el protocolo primario-backup, la elección Bully con épocas, el log replicado, los relojes de Lamport y los clientes. La historia completa de ese desarrollo, con sus autores, se conserva en este repositorio, y su estado final está en el tag `proyecto1-base`.
 
-El despliegue en k3s, la persistencia, la observabilidad y los experimentos son de este trabajo de promoción. Cada issue dejó su registro en [registro-de-construccion/](registro-de-construccion/), con su autor y cómo se trabajó.
+El despliegue en k3s, la persistencia, la observabilidad y los experimentos son de este trabajo de promoción.
+
+El visor usa el kit isométrico de [anatomy](https://github.com/wheresryan22/anatomy), con licencia MIT (`visor/figura/kit/LICENSE`). Cada issue dejó su registro en [registro-de-construccion/](registro-de-construccion/), con su autor y cómo se trabajó.

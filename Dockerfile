@@ -17,6 +17,7 @@ COPY juego/ juego/
 COPY nodo/ nodo/
 COPY cliente/ cliente/
 COPY despliegue/ despliegue/
+COPY visor/ visor/
 COPY tests/ tests/
 COPY run_tests.py demo.py docker-compose.yml ./
 
