@@ -72,6 +72,68 @@ def test_trucardo_nodos_en_entorno_es_identico_a_la_entrada():
         assert {"name": "TRUCARDO_NODOS", "value": entrada} in env
 
 
+def test_la_probe_apunta_al_puerto_del_cluster():
+    deployments = _por_tipo(manifiestos(CLUSTER_TRES, IMAGEN), "Deployment")
+
+    assert len(deployments) == 3
+    for i, d in enumerate(deployments, start=1):
+        probe = d["spec"]["template"]["spec"]["containers"][0]["livenessProbe"]
+        assert probe["tcpSocket"] == {"port": 9600 + i}
+
+
+def test_la_probe_detecta_despues_que_trucardo():
+    original = config.TIMEOUT_CAIDO
+    try:
+        for timeout in (0.5, 3.0, 10.0, 47.3):
+            config.TIMEOUT_CAIDO = timeout
+            deployments = _por_tipo(manifiestos(CLUSTER_TRES, IMAGEN), "Deployment")
+            for d in deployments:
+                probe = d["spec"]["template"]["spec"]["containers"][0]["livenessProbe"]
+                periodo = probe["periodSeconds"]
+                fallas = probe["failureThreshold"]
+                assert isinstance(periodo, int) and periodo >= 1
+                assert isinstance(fallas, int) and fallas >= 1
+                assert periodo * fallas > timeout
+    finally:
+        config.TIMEOUT_CAIDO = original
+
+
+def test_las_tolerancias_son_de_10_segundos():
+    esperadas = {
+        "node.kubernetes.io/unreachable",
+        "node.kubernetes.io/not-ready",
+    }
+    deployments = _por_tipo(manifiestos(CLUSTER_TRES, IMAGEN), "Deployment")
+
+    assert len(deployments) == 3
+    for d in deployments:
+        tolerancias = d["spec"]["template"]["spec"]["tolerations"]
+        assert len(tolerancias) == 2
+        assert {t["key"] for t in tolerancias} == esperadas
+        for t in tolerancias:
+            assert t == {
+                "key": t["key"],
+                "operator": "Exists",
+                "effect": "NoExecute",
+                "tolerationSeconds": 10,
+            }
+
+
+def test_la_anti_afinidad_es_preferida():
+    deployments = _por_tipo(manifiestos(CLUSTER_TRES, IMAGEN), "Deployment")
+
+    assert len(deployments) == 3
+    for d in deployments:
+        anti = d["spec"]["template"]["spec"]["affinity"]["podAntiAffinity"]
+        assert "requiredDuringSchedulingIgnoredDuringExecution" not in anti
+        reglas = anti["preferredDuringSchedulingIgnoredDuringExecution"]
+        assert len(reglas) == 1
+        assert 1 <= reglas[0]["weight"] <= 100
+        termino = reglas[0]["podAffinityTerm"]
+        assert termino["labelSelector"] == {"matchLabels": {"app": "trucardo"}}
+        assert termino["topologyKey"] == "kubernetes.io/hostname"
+
+
 def test_service_usa_host_y_selector():
     services = _por_tipo(manifiestos(CLUSTER_TRES, IMAGEN), "Service")
 

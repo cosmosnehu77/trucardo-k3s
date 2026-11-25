@@ -5,6 +5,8 @@ import sys
 
 from nodo import config
 
+_APP = "trucardo"
+
 # Kubernetes exige etiquetas DNS-1035 (max 63 caracteres) como nombre de Service.
 _NOMBRE_SERVICIO = re.compile(r"^[a-z]([-a-z0-9]*[a-z0-9])?$")
 _LARGO_MAXIMO_HOST = 63
@@ -13,6 +15,9 @@ _LARGO_MAXIMO_HOST = 63
 _NODEPORT_MIN = 30000
 _NODEPORT_MAX = 32767
 _DESPLAZAMIENTO_NODEPORT = 21000
+
+_PROBE_FALLAS = 3
+_TOLERANCIA_SEGUNDOS = 10
 
 
 def _validar_host(host):
@@ -38,11 +43,52 @@ def _nodos_ordenados(texto_nodos):
 
 
 def _etiquetas(nodo):
-    return {"app": "trucardo", "nodo": str(nodo.id_nodo)}
+    return {"app": _APP, "nodo": str(nodo.id_nodo)}
 
 
 def _puertos(nodo):
     return {"pyro": nodo.puerto_pyro, "cluster": nodo.puerto_cluster}
+
+
+def _probe(nodo):
+    # Trucardo decide primero y Kubernetes repara despues (D7).
+    periodo = int(config.TIMEOUT_CAIDO // _PROBE_FALLAS) + 1
+    return {
+        "tcpSocket": {"port": _puertos(nodo)["cluster"]},
+        "periodSeconds": periodo,
+        "failureThreshold": _PROBE_FALLAS,
+    }
+
+
+def _tolerancias():
+    return [
+        {
+            "key": clave,
+            "operator": "Exists",
+            "effect": "NoExecute",
+            "tolerationSeconds": _TOLERANCIA_SEGUNDOS,
+        }
+        for clave in (
+            "node.kubernetes.io/unreachable",
+            "node.kubernetes.io/not-ready",
+        )
+    ]
+
+
+def _anti_afinidad():
+    return {
+        "podAntiAffinity": {
+            "preferredDuringSchedulingIgnoredDuringExecution": [
+                {
+                    "weight": 100,
+                    "podAffinityTerm": {
+                        "labelSelector": {"matchLabels": {"app": _APP}},
+                        "topologyKey": "kubernetes.io/hostname",
+                    },
+                }
+            ]
+        }
+    }
 
 
 def _deployment(nodo, texto_nodos, imagen):
@@ -60,6 +106,8 @@ def _deployment(nodo, texto_nodos, imagen):
             "template": {
                 "metadata": {"labels": _etiquetas(nodo)},
                 "spec": {
+                    "tolerations": _tolerancias(),
+                    "affinity": _anti_afinidad(),
                     "containers": [
                         {
                             "name": "nodo",
@@ -69,8 +117,9 @@ def _deployment(nodo, texto_nodos, imagen):
                             "env": [{"name": "TRUCARDO_NODOS", "value": texto_nodos}],
                             "ports": [{"name": nombre, "containerPort": puerto}
                                       for nombre, puerto in _puertos(nodo).items()],
+                            "livenessProbe": _probe(nodo),
                         }
-                    ]
+                    ],
                 },
             },
         },
