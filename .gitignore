@@ -21,3 +21,8 @@ despliegue/cluster-local/salida/
 
 # manifiestos generados (ver README)
 trucardo.json
+
+# documentos de trabajo personales (quedan en la compu, fuera del repo)
+PLAN.md
+REQUISITOS.md
+registro-de-construccion/
