@@ -539,6 +539,14 @@ def test_con_telemetria_los_nodos_apuntan_al_collector_y_declaran_downward_api()
         ]
 
 
+def test_la_observabilidad_tiene_las_mismas_tolerancias_que_los_nodos():
+    deployments = _por_nombre(manifiestos(CLUSTER_TRES, IMAGEN, telemetria=True), "Deployment")
+    de_los_nodos = deployments["trucardo-nodo1"]["spec"]["template"]["spec"]["tolerations"]
+
+    for nombre in OBSERVABILIDAD_ESPERADA:
+        assert deployments[nombre]["spec"]["template"]["spec"]["tolerations"] == de_los_nodos
+
+
 def test_con_telemetria_todos_los_pods_tienen_host_aliases_de_observabilidad():
     objetos = manifiestos(CLUSTER_TRES, IMAGEN, telemetria=True)
     deployments = _por_tipo(objetos, "Deployment")

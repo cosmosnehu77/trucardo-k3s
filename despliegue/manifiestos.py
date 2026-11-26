@@ -396,6 +396,7 @@ def _deployment_observabilidad(servicio):
 
     pod_spec = {
         "hostAliases": _host_aliases_observabilidad(),
+        "tolerations": _tolerancias(),
         "containers": [contenedor],
     }
     if servicio.get("config"):
