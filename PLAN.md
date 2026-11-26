@@ -888,7 +888,7 @@ Cuando lo que se agrega es una fase entera, sus issues van en su fase y acá que
 | #33 | Regla de comentarios en el código | ✅ |
 | #36 | Imagen con Python 3.15 | ✅ |
 | #72 | Visor en vivo del cluster | ✅ |
-| #73 | Un backup queda trabado si su log diverge del primario en la misma época | ⏳ |
+| #73 | Un backup queda trabado si su log diverge del primario en la misma época | ✅ |
 
 La tabla sigue el **orden de trabajo**, no el numérico.
 

@@ -52,13 +52,9 @@ class Replicador:
         for id_nodo, respuesta in respuestas.items():
             if respuesta.get("ok"):
                 self.m.anotar_seq(id_nodo, respuesta.get("ultimo_seq", 0))
-            motivo = respuesta.get("motivo")
-            if motivo == ATRASADO:
+            if respuesta.get("motivo") in (ATRASADO, ILEGAL):
                 self.poner_al_dia_aparte(id_nodo, respuesta.get("ultimo_seq", 0),
                                          respuesta.get("epoca_ultima", 0))
-            elif motivo == ILEGAL:
-                log.error(f"N{id_nodo} rechaza la op {operacion['seq']} por ilegal: "
-                          f"los estados divergieron y la puesta al dia no lo arregla")
         return respuestas
 
     def poner_al_dia_aparte(self, id_nodo, su_seq, su_epoca):
@@ -71,48 +67,59 @@ class Replicador:
         telemetria.hilo(self._poner_al_dia, id_nodo, su_seq, su_epoca).start()
 
     def _poner_al_dia(self, id_nodo, su_seq, su_epoca):
-        #Le manda a N{id_nodo} las ops que le faltan, todas en un mensaje.
-        nodo = self.m.nodo
         try:
-            with nodo.lock:
-                if nodo.rol != "primario":
-                    return
-                desde = self.punto_en_comun(su_seq, su_epoca)
-                # log[i] es la op con seq i + 1: las que le faltan son estas.
-                faltantes = nodo.estado.log[desde:]
-                if desde == su_seq and not faltantes:
-                    return
-                mi_seq = nodo.estado.ultimo_seq
-
-            with telemetria.span("puesta al dia", nodo, destino=id_nodo,
-                                 desde=desde, cantidad=len(faltantes)):
-                pedido = self.m.mensaje(PUESTA_AL_DIA, desde=desde, ops=faltantes)
-
-                if desde < su_seq:
-                    log.info(f"N{id_nodo} diverge desde la op {desde + 1}: "
-                             f"recorta a la {desde} y le mando {len(faltantes)}")
-                else:
-                    log.info(f"N{id_nodo} esta en la op {su_seq} y yo en la {mi_seq}: "
-                             f"le mando las {len(faltantes)} que le faltan")
-                try:
-                    respuesta = transporte.enviar(self.m.direccion(id_nodo), pedido,
-                                                  timeout=self.m.timeout)
-                except OSError:
-                    log.info(f"no pude ponerlo al dia a N{id_nodo}: no contesta")
-                    return
-
-                nodo.reloj.recibir(respuesta.get("lamport", 0))
-                with nodo.lock:
-                    if id_nodo in self.m.vivos:
-                        self.m.anotar_seq(id_nodo, respuesta.get("ultimo_seq", 0))
-                if respuesta.get("ok"):
-                    log.info(f"N{id_nodo} quedo al dia en la op {respuesta.get('ultimo_seq')}")
-                else:
-                    log.warning(f"N{id_nodo} sigue en la op {respuesta.get('ultimo_seq')}: "
-                                f"{respuesta.get('motivo')}")
+            if self._mandar_log(id_nodo, su_seq, su_epoca) == ILEGAL:
+                # Dos primarios aislados pueden coronarse en la misma epoca: su ultima op
+                # coincide sin que coincida el prefijo. El backup recorta donde difiere.
+                log.warning(f"N{id_nodo} no puede aplicar lo que le falta: "
+                            f"le mando el log entero")
+                self._mandar_log(id_nodo, su_seq, su_epoca, entero=True)
         finally:
-            with nodo.lock:
+            with self.m.nodo.lock:
                 self._poniendo_al_dia.discard(id_nodo)
+
+    def _mandar_log(self, id_nodo, su_seq, su_epoca, entero=False):
+        #Le manda a N{id_nodo} las ops que le faltan, todas en un mensaje. Devuelve el motivo.
+        nodo = self.m.nodo
+        with nodo.lock:
+            if nodo.rol != "primario":
+                return None
+            desde = 0 if entero else self.punto_en_comun(su_seq, su_epoca)
+            # log[i] es la op con seq i + 1: las que le faltan son estas.
+            faltantes = nodo.estado.log[desde:]
+            if desde == su_seq and not faltantes:
+                return None
+            mi_seq = nodo.estado.ultimo_seq
+
+        with telemetria.span("puesta al dia", nodo, destino=id_nodo,
+                             desde=desde, cantidad=len(faltantes)):
+            pedido = self.m.mensaje(PUESTA_AL_DIA, desde=desde, ops=faltantes)
+
+            if entero:
+                log.info(f"le mando a N{id_nodo} las {len(faltantes)} ops del log")
+            elif desde < su_seq:
+                log.info(f"N{id_nodo} diverge desde la op {desde + 1}: "
+                         f"recorta a la {desde} y le mando {len(faltantes)}")
+            else:
+                log.info(f"N{id_nodo} esta en la op {su_seq} y yo en la {mi_seq}: "
+                         f"le mando las {len(faltantes)} que le faltan")
+            try:
+                respuesta = transporte.enviar(self.m.direccion(id_nodo), pedido,
+                                              timeout=self.m.timeout)
+            except OSError:
+                log.info(f"no pude ponerlo al dia a N{id_nodo}: no contesta")
+                return None
+
+            nodo.reloj.recibir(respuesta.get("lamport", 0))
+            with nodo.lock:
+                if id_nodo in self.m.vivos:
+                    self.m.anotar_seq(id_nodo, respuesta.get("ultimo_seq", 0))
+            if respuesta.get("ok"):
+                log.info(f"N{id_nodo} quedo al dia en la op {respuesta.get('ultimo_seq')}")
+            else:
+                log.warning(f"N{id_nodo} sigue en la op {respuesta.get('ultimo_seq')}: "
+                            f"{respuesta.get('motivo')}")
+            return respuesta.get("motivo")
 
     # ---------- del lado del backup ----------
 

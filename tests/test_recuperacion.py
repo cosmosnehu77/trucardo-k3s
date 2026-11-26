@@ -2,7 +2,7 @@ import contextlib
 import logging
 import tempfile
 
-from nodo import disco
+from nodo import disco, transporte
 from nodo.cluster.protocolo import ATRASADO, DUPLICADA, ELECCION
 from nodo.config import Nodo
 from nodo.errores import NoPrimario
@@ -215,3 +215,44 @@ def test_una_cola_de_otra_epoca_que_el_primario_no_tiene_se_recorta():
 
     assert backup._atiendo_puesta_al_dia(ops[:1], 0, 2) is None
     assert backup.estado.log == ops[:1]
+
+
+def _dos_primarios_de_la_misma_epoca():
+    """N1 y N2 se coronaron los dos en la epoca 5, aislados: la op 2 de cada uno
+    es distinta. La op 3 del primario crea la mesa que el backup ya tiene."""
+    cluster = {i: Nodo(i, "127.0.0.1", 0, _puerto_libre()) for i in (1, 2)}
+    primario, backup = _membresia(cluster, 1), _membresia(cluster, 2)
+    primario.nodo.rol, backup.nodo.rol = "primario", "backup"
+    primario.nodo.primario = backup.nodo.primario = 1
+    primario.nodo.epoca = backup.nodo.epoca = 5
+    for op in (_op_crear(1, 5, "m1", "s1"), _op_crear(2, 5, "m2", "s2")):
+        primario.nodo.estado.aplicar(op)
+    for op in (_op_crear(1, 5, "m1", "s1"), _op_crear(2, 5, "m3", "s-aislado")):
+        backup.nodo.estado.aplicar(op)
+    escucha = transporte.Escucha(cluster[2].puerto_cluster, backup.despachar)
+    return primario, backup, escucha
+
+
+def test_un_backup_que_diverge_en_la_misma_epoca_recibe_el_log_entero():
+    primario, backup, escucha = _dos_primarios_de_la_misma_epoca()
+    try:
+        primario.nodo.estado.aplicar(_op_crear(3, 5, "m3", "s3"))
+
+        primario.replica._poner_al_dia(2, 2, 5)
+
+        assert backup.nodo.estado.log == primario.nodo.estado.log
+    finally:
+        escucha.cerrar()
+
+
+def test_una_replica_ilegal_dispara_la_puesta_al_dia_del_log_entero():
+    primario, backup, escucha = _dos_primarios_de_la_misma_epoca()
+    try:
+        with primario.nodo.lock:
+            primario.nodo.estado.aplicar(_op_crear(3, 5, "m3", "s3"))
+            primario.replica.replicar(primario.nodo.estado.log[-1])
+
+        assert _esperar(lambda: backup.nodo.estado.log == primario.nodo.estado.log), \
+            "el backup tiene que terminar con el log del primario"
+    finally:
+        escucha.cerrar()
