@@ -16,6 +16,7 @@ let aguja = 0;
 let agujaMeta = 0;
 let turnoJugador = 0;
 let vistos = new Set();
+let ultimoOtlp = 0;
 const feed = [];
 const pulsos = [];
 
@@ -109,51 +110,86 @@ function mostrarFicha() {
   svg.querySelector(`[data-part="${elegido}"]`)?.setAttribute("data-elegido", "");
 }
 
-function anotar(ms, de, a, tipo, fuente) {
-  feed.unshift({ ms, de, a, tipo, fuente });
+const corto = (nombre) => nombre.replace(/^nodo(\d)$/, "N$1").replace(/^cliente-/, "");
+const colorDe = (nombre) => GEO.colores[nombre.startsWith("cliente-") ? "clientes" : nombre] || GEO.colores.red;
+const etiqueta = (texto, de, a) => `${texto} · ${corto(de)}→${corto(a)}`;
+
+function anotar(ms, de, a, texto, fuente) {
+  feed.unshift({ ms, de, a, texto, fuente });
   feed.length = Math.min(feed.length, 14);
-  mensajesEl.innerHTML = feed.map((m) => `<li><time>${hora(m.ms)}</time> ${m.de} → ${m.a} <b>${m.tipo}</b>${m.fuente === "deducido" ? " <span>deducido</span>" : ""}</li>`).join("");
+  mensajesEl.innerHTML = feed.map((m) => `<li style="--c:${colorDe(m.de)}"><i></i><time>${hora(m.ms)}</time> <b>${m.texto}</b> ${corto(m.de)} → ${corto(m.a)}${m.fuente === "deducido" ? " <span>deducido</span>" : ""}</li>`).join("");
+}
+
+const TEXTOS_SPAN = { replica: "réplica", "puesta al dia recibida": "puesta al día", desafio: "elección", "coordinador recibido": "coordinador" };
+function textoDe(m) {
+  const base = TEXTOS_SPAN[m.tipo] || m.tipo;
+  if (m.cantidad !== null && m.cantidad !== undefined) return `${base} · ${m.cantidad} ops`;
+  return m.seq ? `${base} op ${m.seq}` : base;
 }
 
 const canal = (ax, bx) => [[ax, GEO.ports[0][1], GEO.switchTop], [ax, GEO.channelY, GEO.switchTop], [bx, GEO.channelY, GEO.switchTop], [bx, GEO.ports[0][1], GEO.switchTop]];
-const lampara = (nodo, i) => [GEO.machines[i] + GEO.cardX[nodo - 1] - 11, GEO.card.y + GEO.card.d, 117];
 
 function entreMaquinas(a, b) {
   return [...GEO.cables[a], ...canal(GEO.ports[a][0], GEO.ports[b][0]), ...[...GEO.cables[b]].reverse()];
 }
 
-function rutaNodos(de, a) {
-  const i = dondeEsta(`nodo${de}`);
-  const j = dondeEsta(`nodo${a}`);
-  if (i < 0 || j < 0) return null;
-  if (i === j) return [lampara(de, i), [lampara(de, i)[0], lampara(de, i)[1], 136], [lampara(a, j)[0], lampara(a, j)[1], 136], lampara(a, j)];
-  return entreMaquinas(i, j);
+function puntoDe(componente) {
+  const i = dondeEsta(componente);
+  if (i < 0) return null;
+  const nodo = /^nodo(\d)$/.exec(componente);
+  if (nodo) return { i, p: [GEO.machines[i] + GEO.cardX[nodo[1] - 1] - 11, GEO.card.y + GEO.card.d, 117] };
+  const modulo = GEO.modules.indexOf(componente);
+  return modulo < 0 ? null : { i, p: [GEO.machines[i] + GEO.socketX[modulo], GEO.socketY, GEO.moduleTop] };
+}
+
+function salida({ i, p }) {
+  const jack = GEO.cables[i][0];
+  return [p, [p[0], p[1], GEO.mh + 1], [p[0], GEO.front, GEO.mh + 1], [p[0], GEO.front, jack[2]], jack];
+}
+
+function ruta(de, a) {
+  const o = puntoDe(de);
+  const d = puntoDe(a);
+  if (!o || !d) return null;
+  if (o.i === d.i) {
+    const alto = Math.max(o.p[2], d.p[2]) + 18;
+    return [o.p, [o.p[0], o.p[1], alto], [d.p[0], d.p[1], alto], d.p];
+  }
+  return [...salida(o), ...entreMaquinas(o.i, d.i), ...salida(d).reverse()];
 }
 
 function rutaCliente(c, nodo) {
-  const j = dondeEsta(`nodo${nodo}`);
-  if (j < 0 || c < 0 || c > 3) return null;
+  const d = puntoDe(nodo);
+  if (!d || c < 0 || c > 3) return null;
   const consola = GEO.consoles[c];
   const porHub = [[GEO.hubX, consola[consola.length - 1][1], GEO.hubTop], [GEO.hubX, GEO.uplink[0][1], GEO.hubTop]];
   const top = GEO.switchTop;
   const alCanal = [[GEO.uplinkPort[0] - 6, GEO.channelY, top], [GEO.ports[0][0], GEO.channelY, top], [GEO.ports[0][0], GEO.ports[0][1], top]];
   const entrada = [...consola, ...porHub, ...GEO.uplink, ...alCanal, ...[...GEO.cables[0]].reverse()];
-  return j === 0 ? entrada : [...entrada, ...entreMaquinas(0, j)];
+  return [...entrada, ...(d.i === 0 ? [] : entreMaquinas(0, d.i)), ...salida(d).reverse()];
 }
 
-function lanzar(ruta, tipo, retraso = 0) {
-  if (!ruta || quieto.matches) return;
-  const pts = ruta.map(at);
+function lanzar(camino, { de, texto, r = 2.4, forma = "punto", retraso = 0 }) {
+  if (!camino || quieto.matches) return 0;
+  const pts = camino.map(at);
   const largos = [0];
   for (let i = 1; i < pts.length; i++) largos.push(largos[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
   const total = largos[largos.length - 1];
-  const el = document.createElementNS(NS, "circle");
-  el.setAttribute("class", `visor-pulso visor-${tipo}`);
-  el.setAttribute("r", tipo === "latido" ? "1.6" : tipo === "jugada" ? "2.6" : "2.1");
+  const color = colorDe(de);
+  const el = document.createElementNS(NS, "g");
+  el.setAttribute("class", "visor-pulso");
+  el.setAttribute("data-forma", forma);
   el.style.opacity = "0";
+  el.innerHTML = `<g><rect rx="3" height="12" y="-${r + 15}" style="stroke:${color}"/><text y="-${r + 6}" text-anchor="middle"></text></g><circle r="${r}" style="${forma === "anillo" ? `stroke:${color}` : `fill:${color}`}"/>`;
+  el.querySelector("text").textContent = texto;
   capaPulsos.appendChild(el);
-  pulsos.push({ el, pts, largos, total, inicio: performance.now() + retraso, dur: Math.min(1700, 380 + total * 1.6) });
+  const ancho = el.querySelector("text").getComputedTextLength() + 10;
+  el.querySelector("rect").setAttribute("width", ancho.toFixed(1));
+  el.querySelector("rect").setAttribute("x", (-ancho / 2).toFixed(1));
+  const dur = Math.min(2600, 700 + total * 2.2);
+  pulsos.push({ el, cartel: el.firstChild, ancho, alto: 0, pts, largos, total, inicio: performance.now() + retraso, dur });
   correr();
+  return retraso + dur;
 }
 
 let cuadro = 0;
@@ -175,16 +211,32 @@ function paso(ahora) {
     const u = (d - p.largos[k - 1]) / tramo;
     const x = p.pts[k - 1][0] + (p.pts[k][0] - p.pts[k - 1][0]) * u;
     const y = p.pts[k - 1][1] + (p.pts[k][1] - p.pts[k - 1][1]) * u;
-    p.el.setAttribute("cx", x.toFixed(1));
-    p.el.setAttribute("cy", y.toFixed(1));
+    p.x = x;
+    p.y = y;
+    p.el.setAttribute("transform", `translate(${x.toFixed(1)} ${y.toFixed(1)})`);
     p.el.style.opacity = String(Math.min(1, t * 8, (1 - t) * 8));
   }
+  apilarCarteles(ahora);
   const dt = 1 / 60;
   aguja += quieto.matches ? agujaMeta - aguja : (agujaMeta - aguja) * (1 - Math.exp(-dt / 0.35));
   if (Math.abs(agujaMeta - aguja) < 0.001) aguja = agujaMeta;
   svg.querySelector("[data-aguja]").setAttribute("d", agujaEn(aguja));
   cuadro = pulsos.length || aguja !== agujaMeta ? requestAnimationFrame(paso) : 0;
 }
+function apilarCarteles(ahora) {
+  const puestos = [];
+  for (const p of pulsos) {
+    if (p.x === undefined || ahora < p.inicio) continue;
+    let meta = 0;
+    while (puestos.some((q) => Math.abs(q.x - p.x) < (q.ancho + p.ancho) / 2 + 2 && Math.abs(q.y + q.meta - (p.y + meta)) < 13)) meta -= 13;
+    const oculto = meta < -26;
+    if (!oculto) puestos.push({ x: p.x, y: p.y, ancho: p.ancho, meta });
+    p.alto += (Math.max(meta, -26) - p.alto) * 0.3;
+    p.cartel.setAttribute("transform", `translate(0 ${p.alto.toFixed(1)})`);
+    p.cartel.style.opacity = oculto ? "0" : "1";
+  }
+}
+
 const correr = () => {
   if (!cuadro) cuadro = requestAnimationFrame(paso);
 };
@@ -201,31 +253,37 @@ function mensajes() {
   const nodos = estado.nodos || [];
   const primario = nodos.find((n) => n.rol === "primario");
   const ahora = Date.now();
-  if (primario) {
-    for (const n of nodos) {
-      if (n.id !== primario.id && n.responde) lanzar(rutaNodos(primario.id, n.id), "latido");
-    }
-  }
+  const backups = nodos.filter((n) => primario && n.id !== primario.id && n.responde);
+  backups.forEach((n, k) => lanzar(ruta(`nodo${primario.id}`, `nodo${n.id}`), { de: `nodo${primario.id}`, texto: etiqueta("latido", `nodo${primario.id}`, `nodo${n.id}`), r: 1.7, retraso: k * 350 }));
+
   const antes = anterior && (anterior.nodos || []).find((n) => primario && n.id === primario.id);
   if (primario && antes && antes.epoca !== primario.epoca) {
-    for (const n of nodos) if (n.id !== primario.id && n.responde) lanzar(rutaNodos(primario.id, n.id), "eleccion", 200);
-    anotar(ahora, `nodo${primario.id}`, "todos", "coordinador", "deducido");
+    backups.forEach((n, k) => lanzar(ruta(`nodo${primario.id}`, `nodo${n.id}`), { de: `nodo${primario.id}`, texto: etiqueta(`coordinador · época ${primario.epoca}`, `nodo${primario.id}`, `nodo${n.id}`), forma: "anillo", retraso: 200 + k * 350 }));
+    anotar(ahora, `nodo${primario.id}`, "todos", `coordinador · época ${primario.epoca}`, "deducido");
   }
   if (!primario && nodos.some((n) => n.responde)) {
-    for (const n of nodos) for (const m of nodos) if (n.responde && m.id > n.id) lanzar(rutaNodos(n.id, m.id), "eleccion");
+    for (const n of nodos) for (const m of nodos) if (n.responde && m.id > n.id) lanzar(ruta(`nodo${n.id}`, `nodo${m.id}`), { de: `nodo${n.id}`, texto: etiqueta("elección", `nodo${n.id}`, `nodo${m.id}`), forma: "anillo" });
   }
 
   if (estado.telemetria) {
-    for (const m of estado.mensajes || []) {
+    if (ahora - ultimoOtlp >= 5000) {
+      ultimoOtlp = ahora;
+      nodos.filter((n) => n.responde).forEach((n, k) => lanzar(ruta(`nodo${n.id}`, "collector"), { de: `nodo${n.id}`, texto: etiqueta("OTLP", `nodo${n.id}`, "collector"), r: 2, retraso: k * 300 }));
+      [["jaeger", "trazas"], ["prometheus", "métricas"], ["loki", "logs"]].forEach(([destino, que], k) => lanzar(ruta("collector", destino), { de: "collector", texto: etiqueta(que, "collector", destino), r: 2, retraso: 1800 + k * 300 }));
+    }
+    const nuevos = (estado.mensajes || []).filter((m) => {
       const clave = `${m.ms}|${m.de}|${m.a}|${m.tipo}`;
-      if (vistos.has(clave)) continue;
+      if (vistos.has(clave)) return false;
       vistos.add(clave);
-      if (!anterior) continue;
-      anotar(m.ms, m.de, m.a, m.tipo, "traza");
-      const de = /^nodo(\d)$/.exec(m.de);
-      const a = /^nodo(\d)$/.exec(m.a);
-      if (de && a) lanzar(rutaNodos(Number(de[1]), Number(a[1])), m.tipo.startsWith("replica") || m.tipo.startsWith("puesta") ? "replica" : "eleccion");
-      else if (m.de.startsWith("cliente-") && a) lanzar(rutaCliente((estado.clientes || []).findIndex((c) => c.nombre === m.de.slice(8)), Number(a[1])), "jugada");
+      return !!anterior;
+    });
+    const llegada = {};
+    for (const m of nuevos) {
+      const texto = textoDe(m);
+      const retraso = Math.min(2000, m.ms - nuevos[0].ms);
+      anotar(m.ms, m.de, m.a, texto, "traza");
+      if (m.de.startsWith("cliente-")) llegada[m.seq] = lanzar(rutaCliente((estado.clientes || []).findIndex((c) => c.nombre === m.de.slice(8)), m.a), { de: m.de, texto: etiqueta(texto, m.de, m.a), r: 2.8, retraso });
+      else lanzar(ruta(m.de, m.a), { de: m.de, texto: etiqueta(texto, m.de, m.a), forma: /elección|coordinador/.test(texto) ? "anillo" : "punto", retraso: Math.max(retraso, llegada[m.seq] || 0) });
     }
     if (vistos.size > 4000) vistos = new Set([...vistos].slice(-2000));
     return;
@@ -233,15 +291,19 @@ function mensajes() {
 
   const antesPrim = anterior && (anterior.nodos || []).find((n) => n.rol === "primario");
   if (!primario || !antesPrim || antesPrim.epoca !== primario.epoca) return;
-  const nuevas = Math.min(3, (primario.ultimo_seq || 0) - (antesPrim.ultimo_seq || 0));
+  const desde = antesPrim.ultimo_seq || 0;
+  const nuevas = Math.min(3, (primario.ultimo_seq || 0) - desde);
   const jugando = (estado.clientes || []).map((c, i) => ({ c, i })).filter(({ c, i }) => c.estado === "en_juego" && i < 4);
+  const yo = `nodo${primario.id}`;
   for (let r = 0; r < nuevas; r++) {
+    const op = desde + r + 1;
     const quien = jugando.length ? jugando[turnoJugador++ % jugando.length] : null;
     if (quien) {
-      lanzar(rutaCliente(quien.i, primario.id), "jugada", r * 300);
-      anotar(ahora, `cliente-${quien.c.nombre}`, `nodo${primario.id}`, "jugada", "deducido");
+      const de = `cliente-${quien.c.nombre}`;
+      lanzar(rutaCliente(quien.i, yo), { de, texto: etiqueta(`jugada op ${op}`, de, yo), r: 2.8, retraso: r * 500 });
+      anotar(ahora, de, yo, `jugada op ${op}`, "deducido");
     }
-    for (const n of nodos) if (n.id !== primario.id && n.responde) lanzar(rutaNodos(primario.id, n.id), "replica", r * 300 + 900);
+    backups.forEach((n, k) => lanzar(ruta(yo, `nodo${n.id}`), { de: yo, texto: etiqueta(`réplica op ${op}`, yo, `nodo${n.id}`), retraso: r * 500 + 1200 + k * 350 }));
   }
 }
 

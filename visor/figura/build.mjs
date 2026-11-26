@@ -5,7 +5,21 @@ import * as k from "./kit/iso-kit.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SALIDA = join(HERE, "..", "pagina", "index.html");
-const theme = process.argv.includes("--light") ? "light" : "dark";
+
+const COLORES = {
+  nodo1: ["#e5484d", "Nodo 1"],
+  nodo2: ["#1d6fe0", "Nodo 2"],
+  nodo3: ["#16a34a", "Nodo 3"],
+  control: ["#7c3aed", "Plano de control"],
+  collector: ["#c026d3", "Collector"],
+  jaeger: ["#0891b2", "Jaeger"],
+  prometheus: ["#f97316", "Prometheus"],
+  loki: ["#eab308", "Loki"],
+  grafana: ["#a16207", "Grafana"],
+  visor: ["#27272a", "Visor"],
+  red: ["#64748b", "Red"],
+  clientes: ["#ec4899", "Jugadores"],
+};
 
 const WIDTH = 1120;
 const HEIGHT = 660;
@@ -151,7 +165,7 @@ function card(node, index) {
   out.push(D([at([cx - 16, front, 125]), at([cx + 16, front, 125])], { size: 0.45 }));
   out.push(S(k.slabOf({ x: cx - 16, y: CARD.y - 1, w: 9, d: 7, r: 1 }, CARD.z1, 3.5, P, 2, 0.3), { tone: "mid" }));
   out.push(S(k.slabOf({ x: cx + 7, y: CARD.y - 1, w: 9, d: 7, r: 1 }, CARD.z1, 3.5, P, 2, 0.3), { tone: "mid" }));
-  return part(`carta-${node}-${index}`, out.join(""), ` data-pod="nodo${node}" data-en="${index}" data-off`);
+  return part(`carta-${node}-${index}`, out.join(""), ` data-pod="nodo${node}" data-color="nodo${node}" data-en="${index}" data-off`);
 }
 
 function socket(x, y) {
@@ -190,7 +204,7 @@ function module(name, index) {
     out.push(S(k.slabOf(k.insetPlan(plan, 2), z + 9, 0.6, P, 3), { tone: "lo", crease: "none" }));
     out.push(D(k.dotGrid(x - 3.5, y - 1.5, 4, 2, 2.3, z + 9.6, P), { size: 0.35, tone: "mid" }));
   }
-  return part(`modulo-${name}-${index}`, out.join(""), ` data-pod="${name}" data-en="${index}" data-off`);
+  return part(`modulo-${name}-${index}`, out.join(""), ` data-pod="${name}" data-color="${name}" data-en="${index}" data-off`);
 }
 
 function serverHead() {
@@ -200,11 +214,11 @@ function serverHead() {
   store.push(S(k.cylinder(STORE.x, STORE.y, STORE.r, MH + 2, STORE.h, P, 40, 0.6), { tone: "hi", inner: L([6, 12, 18].map((h) => k.sideArc(STORE.x, STORE.y, STORE.r, MH + 2 + h, P, 28)).join(""), { tone: "faint" }) }));
   store.push(L(k.ring(STORE.x, STORE.y, STORE.r - 3, MH + 2 + STORE.h, P, 32), { tone: "lo" }));
   store.push(D([at([STORE.x, STORE.y, MH + 2 + STORE.h])], { size: 0.8, tone: "mid" }));
-  out.push(part("almacen", store.join("")));
+  out.push(part("almacen", store.join(""), ' data-color="control"'));
   const dnsPlan = { x: DNS.x - DNS.w / 2, y: DNS.y - DNS.d / 2, w: DNS.w, d: DNS.d, r: 1.5 };
   const dns = [S(k.slabOf(dnsPlan, MH, 12, P, 3, 0.5), { tone: "hi", inner: L(k.sideSeam(dnsPlan, MH + 5, P, 3), { tone: "faint" }) })];
   dns.push(D(k.dotGrid(DNS.x - 4.5, DNS.y - 2, 4, 2, 3, MH + 12, P), { size: 0.4, tone: "mid" }));
-  out.push(part("coredns", dns.join("")));
+  out.push(part("coredns", dns.join(""), ' data-color="control"'));
   const dial = [];
   dial.push(S(k.slabOf({ x: DIAL.x - 9, y: DIAL.y - 9, w: 18, d: 18, r: 2 }, MH, 4, P, 3, 0.5), { tone: "mid" }));
   dial.push(D(k.corners({ x: DIAL.x - 9, y: DIAL.y - 9, w: 18, d: 18 }, 2.6).map(([x, y]) => at([x, y, MH + 4])), { size: 0.45 }));
@@ -220,7 +234,7 @@ function serverHead() {
   dial.push(L(needleAt(1), { tone: "faint", free: "start" }).replace("<path", '<path data-deseado'));
   dial.push(`<path class="iso-line" data-tone="lit" data-free="start" data-aguja d="${needleAt(0)}" style="stroke-width:1.1"/>`);
   dial.push(L(k.ring(DIAL.x, DIAL.y, 1.8, top, P, 16), { tone: "mid" }), D([at([DIAL.x, DIAL.y, top + 0.1])], { size: 0.8, tone: "hi" }));
-  out.push(part("control", dial.join("")));
+  out.push(part("control", dial.join(""), ' data-color="control"'));
   return out.join("");
 }
 
@@ -252,7 +266,7 @@ function switchBar() {
   const endJack = { x: SWITCH_END[0], y: SWITCH_END[1] - 6, w: 3, d: 12, r: 0.8 };
   out.push(S(k.slabOf(endJack, 2.5, 7, P, 2, 0.3), { tone: "mid", inner: L(rectX(endJack.y + 3, endJack.y + 9, 4, 8, endJack.x + 3), { tone: "lo" }) }));
   out.push(`<g data-enlace="3">${D([at([SWITCH_END[0], SWITCH_END[1] + 9, 9])], { size: 1.1, tone: "lo" })}</g>`);
-  return part("switch", out.join(""));
+  return part("switch", out.join(""), ' data-color="red"');
 }
 
 const jackFront = (index) => [MACHINES[index] + JACK_X, FRONT + 4, JACK_Z];
@@ -263,7 +277,7 @@ const cableRoute = (index) => {
 
 function cable(index) {
   const points = cableRoute(index).map(at);
-  return part(`cable-${index}`, k.wireSvg(points[0], points[points.length - 1], { via: points.slice(1, -1), tone: "mid", size: 1.1 }));
+  return part(`cable-${index}`, k.wireSvg(points[0], points[points.length - 1], { via: points.slice(1, -1), tone: "mid", size: 1.1 }), ' data-color="red"');
 }
 
 function clientMat() {
@@ -281,7 +295,7 @@ function hub() {
     out.push(L(k.planOutline(k.insetPlan(plan, 2), top + 1, P, 2), { tone: "faint" }));
   });
   out.push(D(k.corners(HUB, 3).map(([x, y]) => at([x, y, top])), { size: 0.45 }));
-  return part("hub", out.join(""));
+  return part("hub", out.join(""), ' data-color="red"');
 }
 
 const consoleRoute = (i) => [[331, CONSOLES[i] + 15, MAT_H + 4], [HUB.x, CONSOLES[i] + 15, MAT_H + 4]];
@@ -301,12 +315,12 @@ function consoleUnit(i) {
   out.push(D([at([326, front, MAT_H + 8])], { size: 1, tone: "lo" }));
   const route = consoleRoute(i).map(at);
   out.push(k.wireSvg(route[0], route[route.length - 1], { via: route.slice(1, -1), tone: "lo", size: 0.9 }));
-  return part(`consola-${i}`, out.join(""), ` data-consola="${i}"`);
+  return part(`consola-${i}`, out.join(""), ` data-consola="${i}" data-color="clientes"`);
 }
 
 function uplink() {
   const points = uplinkRoute().map(at);
-  return part("uplink", k.wireSvg(points[0], points[points.length - 1], { via: points.slice(1, -1), tone: "mid", size: 1.1 }));
+  return part("uplink", k.wireSvg(points[0], points[points.length - 1], { via: points.slice(1, -1), tone: "mid", size: 1.1 }), ' data-color="red"');
 }
 
 const body = [plate()];
@@ -345,9 +359,16 @@ const GEO = {
   consoles: CONSOLES.map((_, i) => toWorld(consoleRoute(i))),
   hubTop: MAT_H + HUB_H + 1,
   hubX: HUB.x + 15,
+  front: FRONT + 4,
+  mh: MH,
+  socketX: SOCKET_X,
+  socketY: SOCKET_Y,
+  modules: MODULES,
+  moduleTop: MH + 18,
+  colores: Object.fromEntries(Object.entries(COLORES).map(([clave, [color]]) => [clave, color])),
 };
 
-const CSS = readFileSync(join(HERE, "visor.css"), "utf8");
+const CSS = Object.entries(COLORES).map(([clave, [color]]) => `.visor [data-color="${clave}"]{--c:${color}}`).join("") + readFileSync(join(HERE, "visor.css"), "utf8");
 const VIVO = readFileSync(join(HERE, "vivo.js"), "utf8");
 const TEXTOS = readFileSync(join(HERE, "textos.js"), "utf8");
 const kitScript = readFileSync(join(HERE, "kit", "iso-kit.mjs"), "utf8").replace(/^export /gm, "");
@@ -358,17 +379,18 @@ const plateBody = k.plateHtml({
   hint: "Clic en una pieza para ver qué hace",
   readout: "conectando…",
   keys: [
-    { mark: "lit", label: "Placa del primario, LED de máquina lista y mensajes en viaje" },
-    { mark: "raised", label: "Pods: placas de Trucardo y módulos de observabilidad, en la máquina donde corren" },
-    { mark: "dim", label: "Máquina caída o Pod que todavía no está listo" },
+    { mark: "lit", label: "Lámpara del primario y LED de máquina lista" },
+    { mark: "raised", label: "Pods con el color de su componente: el primario, pleno; los backups, tenues" },
+    { mark: "dim", label: "En gris: máquina caída o Pod que todavía no está listo" },
   ],
-  caption: "Cada placa aparece en el gabinete donde Kubernetes puso su Pod. La lámpara blanca es el primario, y la barra de cada placa es cuánto del log tiene respecto del más adelantado. El dial del servidor marca cuántos nodos de Trucardo están listos (deseados: 3). Los latidos se dibujan a partir del rol, una vez por segundo. Las réplicas se dibujan a partir del avance de ultimo_seq, y las llamadas entre servicios, de las trazas de Jaeger cuando la telemetría está activa.",
+  caption: "Cada placa aparece en el gabinete donde Kubernetes puso su Pod, y la barra de cada placa es cuánto del log tiene respecto del más adelantado. El dial del servidor marca cuántos nodos de Trucardo están listos (deseados: 3). Cada mensaje viaja con el color de quien lo manda y una etiqueta con qué lleva y de quién a quién. Con telemetría, las llamadas entre servicios salen de las trazas de Jaeger; sin ella, los latidos se deducen del rol y las réplicas, del avance de ultimo_seq. Los envíos OTLP al Collector se dibujan cada 5 s, que es cada cuánto exportan los nodos.",
   body: `<div class="iso-stage visor-stage" tabindex="0" aria-label="Arquitectura de Trucardo en k3s; cada pieza se puede elegir con clic">${svg}</div>`,
 });
 
-const page = `<div class="visor">${plateBody}<section class="visor-panel"><article class="visor-ficha" data-ficha aria-live="polite"></article><aside class="visor-lado"><h2>Jugadores</h2><ul data-jugadores></ul><h2>Mensajes</h2><ol data-mensajes></ol></aside></section></div>`;
-const html = k.pageHtml({ title: "Visor de Trucardo", theme, body: page, width: 1180, script: `${kitScript}\nconst GEO = ${JSON.stringify(GEO)};\n${TEXTOS}\n${VIVO}` })
+const leyenda = Object.entries(COLORES).map(([clave, [, nombre]]) => `<li data-color="${clave}"><i></i>${nombre}</li>`).join("");
+const page = `<div class="visor">${plateBody}<section class="visor-panel"><article class="visor-ficha" data-ficha aria-live="polite"></article><aside class="visor-lado"><h2>Colores</h2><ul class="visor-colores">${leyenda}</ul><h2>Jugadores</h2><ul data-jugadores></ul><h2>Mensajes</h2><ol data-mensajes></ol></aside></section></div>`;
+const html = k.pageHtml({ title: "Visor de Trucardo", theme: "light", body: page, width: 1180, script: `${kitScript}\nconst GEO = ${JSON.stringify(GEO)};\n${TEXTOS}\n${VIVO}` })
   .replace("</style>", `${CSS}</style>`)
   .replace('<html lang="en">', '<html lang="es">');
-writeFileSync(theme === "light" ? SALIDA.replace(".html", "-claro.html") : SALIDA, html);
+writeFileSync(SALIDA, html);
 console.log("escribí", SALIDA);

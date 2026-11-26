@@ -838,6 +838,21 @@ Cuando lo que se agrega es una fase entera, sus issues van en su fase y acá que
 
 ---
 
+### #76 Visor en tema claro, con un color por componente y etiquetas en los mensajes
+- **Requisitos:** RF-21
+- **Tipo:** código
+- **Depende de:** #72
+- **Problema:** el visor era oscuro y monocromo: costaba distinguir las piezas y saber de quién era cada mensaje, y los pulsos no decían qué llevaban.
+- **Qué hacer:**
+  - primero, un test: la instantánea pasa el `seq` y la cantidad de ops de cada mensaje de Jaeger;
+  - tema claro, un color saturado por componente y una leyenda; el primario, pleno, y los backups, tenues;
+  - cada pulso con el color de quien lo manda y una etiqueta con qué lleva y de quién a quién;
+  - con telemetría, los envíos OTLP al Collector y del Collector a Jaeger, Prometheus y Loki.
+- **Criterios de aceptación:** en el cluster local, con dos jugadores, se lee quién manda qué.
+- **Tests:** el de `seq` y cantidad en `tests/test_visor.py`.
+
+---
+
 ## 11. Calendario sugerido
 
 | Día | Issues | Nota |
@@ -889,6 +904,7 @@ Cuando lo que se agrega es una fase entera, sus issues van en su fase y acá que
 | #36 | Imagen con Python 3.15 | ✅ |
 | #72 | Visor en vivo del cluster | ✅ |
 | #73 | Un backup queda trabado si su log diverge del primario en la misma época | ✅ |
+| #76 | Visor en tema claro, con un color por componente y etiquetas en los mensajes | ✅ |
 
 La tabla sigue el **orden de trabajo**, no el numérico.
 

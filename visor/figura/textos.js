@@ -44,7 +44,7 @@ function ficha(id, estado, maquinaDe) {
     const pod = pods.find((p) => maquinaDe(p.maquina) === Number(b)) || pods[0];
     return {
       titulo: `Nodo ${a} de Trucardo`,
-      texto: "Un proceso nodo.servidor dentro de un Pod. Kubernetes lo crea y lo reubica, pero quién manda lo deciden los nodos entre ellos: el primario atiende las jugadas, escribe cada operación en su disco con fsync, la replica a los backups y late cada 1 s. Si un backup pasa 3 s sin latido, arranca una elección Bully que compara (época, último seq, id). La placa tiene la lámpara encendida cuando es el primario, y la barra muestra cuánto del log tiene.",
+      texto: "Un proceso nodo.servidor dentro de un Pod. Kubernetes lo crea y lo reubica, pero quién manda lo deciden los nodos entre ellos: el primario atiende las jugadas, escribe cada operación en su disco con fsync, la replica a los backups y late cada 1 s. Si un backup pasa 3 s sin latido, arranca una elección Bully que compara (época, último seq, id). La placa del primario tiene su color pleno y la lámpara amarilla encendida; las de los backups, el color tenue. La barra muestra cuánto del log tiene.",
       vivo: nodo
         ? fila("Responde", nodo.responde ? "sí" : "no") + fila("Rol", nodo.rol) + fila("Cree que el primario es", nodo.primario === null ? "?" : nodo.primario) + fila("Época", nodo.epoca) + fila("Último seq", nodo.ultimo_seq) + fila("Reloj de Lamport", nodo.reloj) + filasPod(pod)
         : filasPod(pod),
