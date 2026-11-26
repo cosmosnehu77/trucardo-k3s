@@ -51,4 +51,13 @@
 .visor-lado li span,.visor-lado time{color:var(--anatomy-muted)}
 .visor-lado li i{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--c);margin-right:7px;vertical-align:-1px}
 .visor-colores{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:14px}
+.visor-filtros{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 14px;padding:0;border:0}
+.visor-filtros legend{float:left;margin-right:6px;padding:5px 0;font-size:13px;font-weight:600;color:var(--anatomy-strong)}
+.visor-filtros label{display:inline-flex;align-items:center;gap:7px;padding:5px 12px;border-radius:999px;background:var(--anatomy-card);box-shadow:var(--anatomy-lift);font-size:13px;cursor:pointer;user-select:none;color:var(--anatomy-muted)}
+.visor-filtros label:has(input:checked){color:var(--anatomy-strong);box-shadow:inset 0 0 0 1.5px var(--c),var(--anatomy-lift)}
+.visor-filtros input{accent-color:var(--c);margin:0}
+.visor-filtros label:has(input:focus-visible){outline:2px solid var(--c);outline-offset:2px}
+.visor-pulsos-sin-etiquetas .visor-pulso>g{display:none}
+.visor-reloj rect{fill:#fff;stroke-width:1px}
+.visor-reloj text{font-family:var(--anatomy-mono);font-size:8.5px;font-weight:600;fill:#18181b}
 @media (max-width:760px){.visor-panel{grid-template-columns:1fr}}

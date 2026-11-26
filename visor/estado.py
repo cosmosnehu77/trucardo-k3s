@@ -89,7 +89,8 @@ def mensajes(trazas):
         lista.append({"ms": int(span["startTimeUnixNano"]) // 1_000_000,
                       "de": padre[0], "a": servicio, "tipo": span["name"],
                       "seq": atributos.get("trucardo.seq"),
-                      "cantidad": atributos.get("trucardo.cantidad")})
+                      "cantidad": atributos.get("trucardo.cantidad"),
+                      "lamport": atributos.get("trucardo.lamport")})
     return sorted(lista, key=lambda m: (m["ms"], m["a"]))
 
 

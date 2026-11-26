@@ -334,7 +334,7 @@ MACHINES.forEach((_, index) => {
   body.push(part(`maquina-${index}`, pieces.join(""), ` data-maquina="${index}"`));
 });
 body.push(switchBar(), MACHINES.map((_, index) => cable(index)).join(""), clientMat(), hub());
-body.push(CONSOLES.map((_, i) => consoleUnit(i)).join(""), uplink(), `<g data-pulsos></g>`);
+body.push(CONSOLES.map((_, i) => consoleUnit(i)).join(""), uplink(), `<g data-relojes></g><g data-pulsos></g>`);
 
 const svg = k.figureSvg({
   width: WIDTH,
@@ -387,8 +387,19 @@ const plateBody = k.plateHtml({
   body: `<div class="iso-stage visor-stage" tabindex="0" aria-label="Arquitectura de Trucardo en k3s; cada pieza se puede elegir con clic">${svg}</div>`,
 });
 
+const FILTROS = [
+  ["jugadas", "Jugadas", "clientes"],
+  ["replicas", "Réplicas", "nodo1"],
+  ["latidos", "Latidos", "nodo2"],
+  ["epocas", "Épocas y elecciones", "control"],
+  ["telemetria", "Telemetría", "collector"],
+  ["relojes", "Relojes de Lamport", "visor"],
+  ["etiquetas", "Etiquetas", "red"],
+  ["lenta", "Cámara lenta", "red"],
+];
+const filtros = `<fieldset class="visor-filtros"><legend>Mostrar</legend>${FILTROS.map(([clave, nombre, color]) => `<label data-color="${color}"><input type="checkbox" data-filtro="${clave}">${nombre}</label>`).join("")}</fieldset>`;
 const leyenda = Object.entries(COLORES).map(([clave, [, nombre]]) => `<li data-color="${clave}"><i></i>${nombre}</li>`).join("");
-const page = `<div class="visor">${plateBody}<section class="visor-panel"><article class="visor-ficha" data-ficha aria-live="polite"></article><aside class="visor-lado"><h2>Colores</h2><ul class="visor-colores">${leyenda}</ul><h2>Jugadores</h2><ul data-jugadores></ul><h2>Mensajes</h2><ol data-mensajes></ol></aside></section></div>`;
+const page = `<div class="visor">${filtros}${plateBody}<section class="visor-panel"><article class="visor-ficha" data-ficha aria-live="polite"></article><aside class="visor-lado"><h2>Colores</h2><ul class="visor-colores">${leyenda}</ul><h2>Jugadores</h2><ul data-jugadores></ul><h2>Mensajes</h2><ol data-mensajes></ol></aside></section></div>`;
 const html = k.pageHtml({ title: "Visor de Trucardo", theme: "light", body: page, width: 1180, script: `${kitScript}\nconst GEO = ${JSON.stringify(GEO)};\n${TEXTOS}\n${VIVO}` })
   .replace("</style>", `${CSS}</style>`)
   .replace('<html lang="en">', '<html lang="es">');

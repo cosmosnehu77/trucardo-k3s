@@ -1,6 +1,7 @@
 const P = GEO.P;
 const svg = document.querySelector(".visor-stage svg");
 const capaPulsos = svg.querySelector("[data-pulsos]");
+const capaRelojes = svg.querySelector("[data-relojes]");
 const readout = document.querySelector("[data-readout]");
 const fichaEl = document.querySelector("[data-ficha]");
 const jugadoresEl = document.querySelector("[data-jugadores]");
@@ -17,6 +18,12 @@ let agujaMeta = 0;
 let turnoJugador = 0;
 let vistos = new Set();
 let ultimoOtlp = 0;
+
+const FILTROS = { jugadas: true, replicas: true, latidos: true, epocas: true, telemetria: true, relojes: false, etiquetas: true, lenta: false };
+try {
+  Object.assign(FILTROS, JSON.parse(localStorage.getItem("visor-filtros") || "{}"));
+} catch {}
+const mostrar = (cat) => FILTROS[cat] !== false;
 const feed = [];
 const pulsos = [];
 
@@ -99,7 +106,28 @@ function aplicar() {
   jugadoresEl.innerHTML = clientes.length
     ? clientes.map((c) => `<li><b>${c.nombre}</b> <span>${c.mesa ? `mesa ${c.mesa} · ${c.estado.replace("_", " ")}` : "visto en trazas"}</span></li>`).join("")
     : "<li><span>Nadie está jugando.</span></li>";
+  dibujarRelojes();
   mostrarFicha();
+}
+
+function dibujarRelojes() {
+  capaRelojes.innerHTML = "";
+  if (!FILTROS.relojes || !estado) return;
+  const porMaquina = [0, 0, 0];
+  for (const n of estado.nodos || []) {
+    const i = dondeEsta(`nodo${n.id}`);
+    if (!n.responde || i < 0) continue;
+    const [x, y] = at([GEO.machines[i] + GEO.cardX[n.id - 1], GEO.card.y, GEO.card.z1 + 8]);
+    const g = document.createElementNS(NS, "g");
+    g.setAttribute("class", "visor-reloj");
+    g.setAttribute("transform", `translate(${x.toFixed(1)} ${(y - 15 * porMaquina[i]++).toFixed(1)})`);
+    g.innerHTML = `<rect rx="3" height="13" y="-13" style="stroke:${colorDe(`nodo${n.id}`)}"/><text y="-3.5" text-anchor="middle"></text>`;
+    g.querySelector("text").textContent = `N${n.id} · e${n.epoca} · L ${n.reloj}`;
+    capaRelojes.appendChild(g);
+    const ancho = g.querySelector("text").getComputedTextLength() + 10;
+    g.querySelector("rect").setAttribute("width", ancho.toFixed(1));
+    g.querySelector("rect").setAttribute("x", (-ancho / 2).toFixed(1));
+  }
 }
 
 function mostrarFicha() {
@@ -114,13 +142,27 @@ const corto = (nombre) => nombre.replace(/^nodo(\d)$/, "N$1").replace(/^cliente-
 const colorDe = (nombre) => GEO.colores[nombre.startsWith("cliente-") ? "clientes" : nombre] || GEO.colores.red;
 const etiqueta = (texto, de, a) => `${texto} · ${corto(de)}→${corto(a)}`;
 
-function anotar(ms, de, a, texto, fuente) {
-  feed.unshift({ ms, de, a, texto, fuente });
-  feed.length = Math.min(feed.length, 14);
-  mensajesEl.innerHTML = feed.map((m) => `<li style="--c:${colorDe(m.de)}"><i></i><time>${hora(m.ms)}</time> <b>${m.texto}</b> ${corto(m.de)} → ${corto(m.a)}${m.fuente === "deducido" ? " <span>deducido</span>" : ""}</li>`).join("");
+function anotar(ms, de, a, texto, fuente, cat) {
+  feed.unshift({ ms, de, a, texto, fuente, cat });
+  feed.length = Math.min(feed.length, 60);
+  pintarFeed();
+}
+
+function pintarFeed() {
+  mensajesEl.innerHTML = feed.filter((m) => mostrar(m.cat)).slice(0, 14).map((m) => `<li style="--c:${colorDe(m.de)}"><i></i><time>${hora(m.ms)}</time> <b>${m.texto}</b> ${corto(m.de)} → ${corto(m.a)}${m.fuente === "deducido" ? " <span>deducido</span>" : ""}</li>`).join("");
 }
 
 const TEXTOS_SPAN = { replica: "réplica", "puesta al dia recibida": "puesta al día", desafio: "elección", "coordinador recibido": "coordinador" };
+function categoriaDe(m) {
+  if (m.de.startsWith("cliente-")) return "jugadas";
+  if (/^(replica|puesta)/.test(m.tipo)) return "replicas";
+  if (/^latido/.test(m.tipo)) return "latidos";
+  if (/eleccion|desafio|coordinador/.test(m.tipo)) return "epocas";
+  return "otros";
+}
+
+const conReloj = (texto, lamport) => (FILTROS.relojes && lamport ? `${texto} · L ${lamport}` : texto);
+
 function textoDe(m) {
   const base = TEXTOS_SPAN[m.tipo] || m.tipo;
   if (m.cantidad !== null && m.cantidad !== undefined) return `${base} · ${m.cantidad} ops`;
@@ -169,8 +211,8 @@ function rutaCliente(c, nodo) {
   return [...entrada, ...(d.i === 0 ? [] : entreMaquinas(0, d.i)), ...salida(d).reverse()];
 }
 
-function lanzar(camino, { de, texto, r = 2.4, forma = "punto", retraso = 0 }) {
-  if (!camino || quieto.matches) return 0;
+function lanzar(camino, { cat, de, texto, r = 2.4, forma = "punto", retraso = 0 }) {
+  if (!camino || quieto.matches || !mostrar(cat)) return 0;
   const pts = camino.map(at);
   const largos = [0];
   for (let i = 1; i < pts.length; i++) largos.push(largos[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
@@ -186,8 +228,8 @@ function lanzar(camino, { de, texto, r = 2.4, forma = "punto", retraso = 0 }) {
   const ancho = el.querySelector("text").getComputedTextLength() + 10;
   el.querySelector("rect").setAttribute("width", ancho.toFixed(1));
   el.querySelector("rect").setAttribute("x", (-ancho / 2).toFixed(1));
-  const dur = Math.min(2600, 700 + total * 2.2);
-  pulsos.push({ el, cartel: el.firstChild, ancho, alto: 0, pts, largos, total, inicio: performance.now() + retraso, dur });
+  const dur = Math.min(2600, 700 + total * 2.2) * (FILTROS.lenta ? 2.5 : 1);
+  pulsos.push({ el, cat, cartel: el.firstChild, ancho, alto: 0, pts, largos, total, inicio: performance.now() + retraso, dur });
   correr();
   return retraso + dur;
 }
@@ -254,22 +296,22 @@ function mensajes() {
   const primario = nodos.find((n) => n.rol === "primario");
   const ahora = Date.now();
   const backups = nodos.filter((n) => primario && n.id !== primario.id && n.responde);
-  backups.forEach((n, k) => lanzar(ruta(`nodo${primario.id}`, `nodo${n.id}`), { de: `nodo${primario.id}`, texto: etiqueta("latido", `nodo${primario.id}`, `nodo${n.id}`), r: 1.7, retraso: k * 350 }));
+  backups.forEach((n, k) => lanzar(ruta(`nodo${primario.id}`, `nodo${n.id}`), { cat: "latidos", de: `nodo${primario.id}`, texto: etiqueta("latido", `nodo${primario.id}`, `nodo${n.id}`), r: 1.7, retraso: k * 350 }));
 
   const antes = anterior && (anterior.nodos || []).find((n) => primario && n.id === primario.id);
   if (primario && antes && antes.epoca !== primario.epoca) {
-    backups.forEach((n, k) => lanzar(ruta(`nodo${primario.id}`, `nodo${n.id}`), { de: `nodo${primario.id}`, texto: etiqueta(`coordinador · época ${primario.epoca}`, `nodo${primario.id}`, `nodo${n.id}`), forma: "anillo", retraso: 200 + k * 350 }));
-    anotar(ahora, `nodo${primario.id}`, "todos", `coordinador · época ${primario.epoca}`, "deducido");
+    backups.forEach((n, k) => lanzar(ruta(`nodo${primario.id}`, `nodo${n.id}`), { cat: "epocas", de: `nodo${primario.id}`, texto: etiqueta(`coordinador · época ${primario.epoca}`, `nodo${primario.id}`, `nodo${n.id}`), forma: "anillo", retraso: 200 + k * 350 }));
+    anotar(ahora, `nodo${primario.id}`, "todos", `coordinador · época ${primario.epoca}`, "deducido", "epocas");
   }
   if (!primario && nodos.some((n) => n.responde)) {
-    for (const n of nodos) for (const m of nodos) if (n.responde && m.id > n.id) lanzar(ruta(`nodo${n.id}`, `nodo${m.id}`), { de: `nodo${n.id}`, texto: etiqueta("elección", `nodo${n.id}`, `nodo${m.id}`), forma: "anillo" });
+    for (const n of nodos) for (const m of nodos) if (n.responde && m.id > n.id) lanzar(ruta(`nodo${n.id}`, `nodo${m.id}`), { cat: "epocas", de: `nodo${n.id}`, texto: etiqueta("elección", `nodo${n.id}`, `nodo${m.id}`), forma: "anillo" });
   }
 
   if (estado.telemetria) {
     if (ahora - ultimoOtlp >= 5000) {
       ultimoOtlp = ahora;
-      nodos.filter((n) => n.responde).forEach((n, k) => lanzar(ruta(`nodo${n.id}`, "collector"), { de: `nodo${n.id}`, texto: etiqueta("OTLP", `nodo${n.id}`, "collector"), r: 2, retraso: k * 300 }));
-      [["jaeger", "trazas"], ["prometheus", "métricas"], ["loki", "logs"]].forEach(([destino, que], k) => lanzar(ruta("collector", destino), { de: "collector", texto: etiqueta(que, "collector", destino), r: 2, retraso: 1800 + k * 300 }));
+      nodos.filter((n) => n.responde).forEach((n, k) => lanzar(ruta(`nodo${n.id}`, "collector"), { cat: "telemetria", de: `nodo${n.id}`, texto: etiqueta("OTLP", `nodo${n.id}`, "collector"), r: 2, retraso: k * 300 }));
+      [["jaeger", "trazas"], ["prometheus", "métricas"], ["loki", "logs"]].forEach(([destino, que], k) => lanzar(ruta("collector", destino), { cat: "telemetria", de: "collector", texto: etiqueta(que, "collector", destino), r: 2, retraso: 1800 + k * 300 }));
     }
     const nuevos = (estado.mensajes || []).filter((m) => {
       const clave = `${m.ms}|${m.de}|${m.a}|${m.tipo}`;
@@ -280,10 +322,12 @@ function mensajes() {
     const llegada = {};
     for (const m of nuevos) {
       const texto = textoDe(m);
+      const cat = categoriaDe(m);
+      const cartel = conReloj(etiqueta(texto, m.de, m.a), m.lamport);
       const retraso = Math.min(2000, m.ms - nuevos[0].ms);
-      anotar(m.ms, m.de, m.a, texto, "traza");
-      if (m.de.startsWith("cliente-")) llegada[m.seq] = lanzar(rutaCliente((estado.clientes || []).findIndex((c) => c.nombre === m.de.slice(8)), m.a), { de: m.de, texto: etiqueta(texto, m.de, m.a), r: 2.8, retraso });
-      else lanzar(ruta(m.de, m.a), { de: m.de, texto: etiqueta(texto, m.de, m.a), forma: /elección|coordinador/.test(texto) ? "anillo" : "punto", retraso: Math.max(retraso, llegada[m.seq] || 0) });
+      anotar(m.ms, m.de, m.a, conReloj(texto, m.lamport), "traza", cat);
+      if (cat === "jugadas") llegada[m.seq] = lanzar(rutaCliente((estado.clientes || []).findIndex((c) => c.nombre === m.de.slice(8)), m.a), { cat, de: m.de, texto: cartel, r: 2.8, retraso });
+      else lanzar(ruta(m.de, m.a), { cat, de: m.de, texto: cartel, forma: cat === "epocas" ? "anillo" : "punto", retraso: Math.max(retraso, llegada[m.seq] || 0) });
     }
     if (vistos.size > 4000) vistos = new Set([...vistos].slice(-2000));
     return;
@@ -300,10 +344,10 @@ function mensajes() {
     const quien = jugando.length ? jugando[turnoJugador++ % jugando.length] : null;
     if (quien) {
       const de = `cliente-${quien.c.nombre}`;
-      lanzar(rutaCliente(quien.i, yo), { de, texto: etiqueta(`jugada op ${op}`, de, yo), r: 2.8, retraso: r * 500 });
-      anotar(ahora, de, yo, `jugada op ${op}`, "deducido");
+      lanzar(rutaCliente(quien.i, yo), { cat: "jugadas", de, texto: etiqueta(`jugada op ${op}`, de, yo), r: 2.8, retraso: r * 500 });
+      anotar(ahora, de, yo, `jugada op ${op}`, "deducido", "jugadas");
     }
-    backups.forEach((n, k) => lanzar(ruta(yo, `nodo${n.id}`), { de: yo, texto: etiqueta(`réplica op ${op}`, yo, `nodo${n.id}`), retraso: r * 500 + 1200 + k * 350 }));
+    backups.forEach((n, k) => lanzar(ruta(yo, `nodo${n.id}`), { cat: "replicas", de: yo, texto: etiqueta(`réplica op ${op}`, yo, `nodo${n.id}`), retraso: (r * 500 + 1200 + k * 350) * (FILTROS.lenta ? 2.5 : 1) }));
   }
 }
 
@@ -328,6 +372,25 @@ async function ciclo() {
   }
   setTimeout(ciclo, 1000);
 }
+
+document.querySelectorAll("[data-filtro]").forEach((caja) => {
+  caja.checked = FILTROS[caja.dataset.filtro];
+  caja.addEventListener("change", () => {
+    FILTROS[caja.dataset.filtro] = caja.checked;
+    try {
+      localStorage.setItem("visor-filtros", JSON.stringify(FILTROS));
+    } catch {}
+    capaPulsos.classList.toggle("visor-pulsos-sin-etiquetas", !FILTROS.etiquetas);
+    for (let i = pulsos.length - 1; i >= 0; i--) {
+      if (mostrar(pulsos[i].cat)) continue;
+      pulsos[i].el.remove();
+      pulsos.splice(i, 1);
+    }
+    dibujarRelojes();
+    pintarFeed();
+  });
+});
+capaPulsos.classList.toggle("visor-pulsos-sin-etiquetas", !FILTROS.etiquetas);
 
 let sobre = null;
 svg.addEventListener("pointermove", (ev) => {
