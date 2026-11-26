@@ -5,11 +5,11 @@ Qué pasa cuando algo falla con Trucardo en k3s, caso por caso. Cada caso tiene 
 Hay dos capas que reaccionan a una falla, y los experimentos muestran cómo se reparten el trabajo:
 
 - **Trucardo** detecta en segundos que el primario no late (`TIMEOUT_CAIDO` = 3 s), elige otro y la partida sigue;
-- **Kubernetes** repara después: vuelve a crear el Pod que falta, en la misma máquina o en otra. Tarda más, porque detectar una máquina caída le lleva unos 40 s, a los que suma 10 s de tolerancia (D8).
+- **Kubernetes** repara después: vuelve a crear el Pod que falta, en la misma máquina o en otra. Tarda más, porque detectar una máquina caída le lleva unos 40 s, a los que suma 10 s de tolerancia.
 
 ## Preparación
 
-Todo corre en el cluster local de la #8. Levantalo, cargá la imagen y aplicá los manifiestos con los pasos del [README](../README.md#cluster-local-de-desarrollo-k3s-en-contenedores).
+Todo corre en el cluster local. Levantalo, cargá la imagen y aplicá los manifiestos con los pasos del [README](../README.md#en-kubernetes).
 
 Para acortar los comandos, en cada terminal definí:
 
@@ -78,7 +78,7 @@ k delete pod -l nodo=3 --wait=false
 
 **Por qué.**
 
-- **Kubernetes no espera a Trucardo.** Al borrar el Pod, el ReplicaSet crea otro enseguida, 2 s antes de que los backups noten la falta del primario. Como la anti-afinidad es preferida (D9) y `maquina1` todavía tenía el Pod viejo terminando, el nuevo fue a `maquina3`.
+- **Kubernetes no espera a Trucardo.** Al borrar el Pod, el ReplicaSet crea otro enseguida, 2 s antes de que los backups noten la falta del primario. Como la anti-afinidad es preferida y `maquina1` todavía tenía el Pod viejo terminando, el nuevo fue a `maquina3`.
 - **El Pod nuevo no se queda con el puesto.** N3 tiene el id mayor, pero arranca con el log vacío. Las credenciales de la elección comparan primero la frescura del log (época de la última op, `ultimo_seq`) y recién después el id (#23), así que N3 pierde contra N1 y N2.
 - **La jugada no se pierde.** El cliente reintenta durante 25 s (`REINTENTO_TOTAL`) y su jugada entra con el primario nuevo, 4,2 s después.
 - **Por qué arrancó vacío.** Se mudó a `maquina3`, que no tenía su log, y se puso al día por la red. Si hubiera vuelto a `maquina1`, habría arrancado con su disco.
@@ -121,7 +121,7 @@ k get pods → los tres Running, RESTARTS 0
 
 **Por qué.**
 
-- **Kubernetes no ve el cuelgue.** La *liveness probe* abre una conexión TCP al puerto del cluster (D7). Con el proceso detenido, el kernel igual acepta la conexión, porque la cola de conexiones del socket la atiende el sistema operativo, no el proceso. Para Kubernetes, el Pod sigue sano.
+- **Kubernetes no ve el cuelgue.** La *liveness probe* abre una conexión TCP al puerto del cluster. Con el proceso detenido, el kernel igual acepta la conexión, porque la cola de conexiones del socket la atiende el sistema operativo, no el proceso. Para Kubernetes, el Pod sigue sano.
 - **Trucardo sí lo ve**, porque un nodo colgado no late. Al no contestar, a los 3 s los backups lo dan por caído.
 - **Las épocas resuelven la vuelta.** Al reanudarse, N2 sigue creyéndose primario de la época 2. Su primer latido le llega a N1, que ya está en la época 3 y lo rechaza. N2 adopta la época 3, pasa a backup y recibe lo que se jugó mientras estaba colgado.
 
@@ -160,7 +160,7 @@ $C start maquina2
 **Por qué.**
 
 - **Para Trucardo, perder un backup cuesta poco.** El primario saca a N1 de la vista en el primer latido sin respuesta. Pero la vista no decide a quién replicar: cada jugada se manda a todos los nodos del cluster, y el primario espera hasta `TIMEOUT_ACK` (1 s) la respuesta de N1. Por eso las jugadas pasan a tardar 1 s, o 2 s si dos se encolan, hasta que el Pod nuevo de N1 contesta.
-- **Kubernetes tarda casi un minuto.** El servidor declara `NotReady` a la máquina recién a los ~45 s sin noticias del kubelet. Después aplica los 10 s de tolerancia (D8) y desaloja el Pod.
+- **Kubernetes tarda casi un minuto.** El servidor declara `NotReady` a la máquina recién a los ~45 s sin noticias del kubelet. Después aplica los 10 s de tolerancia y desaloja el Pod.
 - **El Pod viejo queda `Terminating`** hasta que vuelva `maquina2`: nadie puede confirmar que el proceso murió, porque el kubelet que lo haría está en la máquina apagada. Al encenderla, el kubelet lo borra.
 - **El Pod nuevo arranca vacío**, porque `maquina1` no tenía el log de N1, y se pone al día por la red.
 
@@ -250,7 +250,7 @@ Mientras se actualizaban los backups, ninguna jugada tardó más de 1 s.
 **Por qué.**
 
 - **De a uno y el primario al final.** Mientras dos nodos están al día, actualizar el tercero no pone en riesgo nada. Si se actualizara primero el primario, la elección se haría con un backup que quizás todavía se está poniendo al día.
-- **`Recreate` (D3).** Kubernetes mata el Pod viejo antes de crear el nuevo. Así nunca hay dos procesos con el mismo id, aunque haya unos segundos sin ese nodo. Con `RollingUpdate`, el nuevo arrancaría con el viejo todavía vivo.
+- **`Recreate`.** Kubernetes mata el Pod viejo antes de crear el nuevo. Así nunca hay dos procesos con el mismo id, aunque haya unos segundos sin ese nodo. Con `RollingUpdate`, el nuevo arrancaría con el viejo todavía vivo.
 - **N2 volvió como backup aunque tenía todo.** Arrancó con su disco y las mismas credenciales que N3, (4, 486). En el empate gana el id mayor, N3. No hubo pérdida: el log de los dos era el mismo.
 - **N3 arrancó en la época 1 y se puso al día desde la op 24.** En `maquina1` estaba el log de N3 de cuando era primario, al principio. Sus 24 operaciones coinciden con las del primario, así que sólo recibe lo que sigue (la coincidencia de logs de la #23).
 
@@ -301,7 +301,7 @@ Al volver `maquina1` (07:53:00), los dos primarios se encuentran:
 
 **Por qué.**
 
-- **Los nodos se buscan por nombre** (`nodo1`, `nodo2`, `nodo3`, D5), y los nombres los resuelve CoreDNS. En k3s, CoreDNS es **una sola réplica** y corre en el servidor:
+- **Los nodos se buscan por nombre** (`nodo1`, `nodo2`, `nodo3`), y los nombres los resuelve CoreDNS. En k3s, CoreDNS es **una sola réplica** y corre en el servidor:
 
   ```
   $ k get pods -n kube-system -o custom-columns=POD:.metadata.name,NODO:.spec.nodeName
@@ -359,7 +359,7 @@ $C exec -T maquina2 sh -c 'for ip in 172.30.0.11 172.30.0.13; do iptables -I INP
 
 Al rato, curá la partición con el mismo comando, cambiando `-I` por `-D`.
 
-**Qué se espera.** Es el límite que el plan acepta (D4): Trucardo no tiene quórum, así que cada lado tiene su primario y confirma jugadas que el otro no ve. Kubernetes no lo resuelve. Al contrario: agrega una **segunda copia** del nodo aislado.
+**Qué se espera.** Es el límite que el plan acepta: Trucardo no tiene quórum, así que cada lado tiene su primario y confirma jugadas que el otro no ve. Kubernetes no lo resuelve. Al contrario: agrega una **segunda copia** del nodo aislado.
 
 **Evidencia.**
 
@@ -387,7 +387,7 @@ Después de la partición, el disco que N2 dejó en `maquina2` todavía tiene es
 **Por qué.**
 
 - **Sin quórum, cada lado se corona.** La mayoría (N1 y N3) elige un primario de la época 7. N2 no recibe nada y sigue siendo el de la época 6. Confirma las jugadas de `bot-a` sin acks («0/0»), porque el diseño del Proyecto 1 prefiere seguir jugando a frenar.
-- **Kubernetes empeora el problema.** El servidor deja de oír al kubelet de `maquina2`, la marca `NotReady` y crea otro N2 en `maquina3`. No puede matar al viejo, porque el kubelet que lo haría está del otro lado. Quedan **dos procesos con el id 2**, que `Recreate` (D3) evita en todos los demás casos. Por eso un StatefulSet espera a que la máquina vuelva (D4): prefiere no tener el nodo antes que tenerlo dos veces.
+- **Kubernetes empeora el problema.** El servidor deja de oír al kubelet de `maquina2`, la marca `NotReady` y crea otro N2 en `maquina3`. No puede matar al viejo, porque el kubelet que lo haría está del otro lado. Quedan **dos procesos con el id 2**, que `Recreate` evita en todos los demás casos. Por eso un StatefulSet espera a que la máquina vuelva: prefiere no tener el nodo antes que tenerlo dos veces.
 - **Al curarse, gana la época mayor.** El kubelet de `maquina2` se entera de que su Pod fue borrado y lo mata. `bot-a` vuelve a la mayoría, y sus jugadas de la época 6 ya no existen: su jugador ve otras cartas en la mano («no tiene 12 de oro»).
 - **Es el mismo problema que el caso 6**, pero causado por la red. Las épocas evitan que el primario viejo siga mandando después de curarse la partición, pero no que confirme jugadas mientras dura. Resolverlo exige quórum: no confirmar sin la mayoría (Raft, Paxos). Es la frontera del modelo primario-backup.
 
@@ -468,7 +468,7 @@ quien_es → 1 BACKUP e=7 1000 | 2 BACKUP e=7 1000 | 3 PRIMARIO e=7 1000
 
 **Por qué.**
 
-- **El disco es de la máquina, no del nodo.** Con `hostPath` (D14), un Pod que se muda encuentra lo que dejó ahí otra vez, aunque sea viejo. Un PVC de `local-path` evitaría eso, pero dejaría al Pod `Pending` mientras su máquina esté apagada.
+- **El disco es de la máquina, no del nodo.** Con `hostPath`, un Pod que se muda encuentra lo que dejó ahí otra vez, aunque sea viejo. Un PVC de `local-path` evitaría eso, pero dejaría al Pod `Pending` mientras su máquina esté apagada.
 - **El primario no sabe dónde empieza la divergencia.** Sólo conoce la punta de N2, (6, 726), y en su log la op 726 es de la época 7. Le manda todo desde la op 0.
 - **El backup recorta sólo lo que difiere**, como en Raft. Las ops 1 a 712 eran iguales a las del primario y se quedan. Desde la 713 son las que el N2 aislado confirmó sin acks en el caso 7: se recortan, en disco y en memoria.
 - **Por eso los tres terminan con el mismo log.** Es el criterio de aceptación de la #23.
@@ -562,7 +562,7 @@ k get pods → trucardo-nodo2-…-q8pxl  maquina2  RESTARTS 0          ← el mi
 
 Desde la #15, con `--telemetria`, cada nodo manda sus trazas a Jaeger (#11 a #14). Estos casos repiten experimentos anteriores mirando las trazas, y muestran lo que se ve ahí y no en los logs.
 
-**Preparación.** Cargá también la imagen de Jaeger y aplicá los manifiestos generados con `--telemetria` (ver el [README](../README.md#cluster-local-de-desarrollo-k3s-en-contenedores)). La interfaz queda en <http://172.30.0.11:30686>.
+**Preparación.** Cargá también la imagen de Jaeger y aplicá los manifiestos generados con `--telemetria` (ver el [README](../README.md#telemetría-y-visor)). La interfaz queda en <http://172.30.0.11:30686>.
 
 Para que la traza empiece en el cliente, el cliente también tiene que exportar. Lo hace por el puerto OTLP de Jaeger, que Kubernetes asigna al azar:
 
@@ -741,7 +741,7 @@ La curación, en una sola traza:
 
 Desde la #28, con `--telemetria`, los nodos mandan todo a un *Collector*, que reparte: las trazas a Jaeger, las métricas a Prometheus y los logs a Loki. Grafana muestra un tablero con las métricas de dominio de la #26 y los logs de la #27. Estos casos repiten experimentos anteriores con el tablero abierto.
 
-**Preparación.** Cargá las imágenes y aplicá los manifiestos con `--telemetria` (ver el [README](../README.md#cluster-local-de-desarrollo-k3s-en-contenedores)). El tablero queda en <http://172.30.0.11:30300/d/trucardo>. Para que el cliente también mande sus trazas, sumale `-e OTEL_EXPORTER_OTLP_ENDPOINT=http://172.30.0.11:30318`.
+**Preparación.** Cargá las imágenes y aplicá los manifiestos con `--telemetria` (ver el [README](../README.md#telemetría-y-visor)). El tablero queda en <http://172.30.0.11:30300/d/trucardo>. Para que el cliente también mande sus trazas, sumale `-e OTEL_EXPORTER_OTLP_ENDPOINT=http://172.30.0.11:30318`.
 
 **Cómo leer la evidencia.** Las tablas salen de la API de Prometheus de a 5 s, con las mismas consultas que los paneles. La única diferencia es «sin acks (1 min)»: la tabla suma los nodos en una columna, y el panel dibuja una línea por nodo. Un `-` es una consulta sin muestras: una serie que no llegó en los últimos 10 s o, en «sin acks», un contador que todavía no tiene dos muestras en el minuto. Los logs salen de Loki a través de Grafana, con el `trace_id` que guarda cada línea.
 

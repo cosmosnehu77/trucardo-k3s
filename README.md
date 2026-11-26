@@ -1,85 +1,117 @@
-# Trucardo en k3s
+<p align="center">
+  <img src="imagenes/visor.png" alt="El cluster dibujado por el visor: tres máquinas, un nodo de Trucardo en cada una, la red y los jugadores" width="820">
+</p>
 
-Trabajo de **promoción** de Sistemas Distribuidos 2026 (UNPSJB). Integrantes: Nehuén García y Alan Viera.
+<h1 align="center">Trucardo en k3s</h1>
 
-Tomamos **Trucardo** —el servicio de truco distribuido del Proyecto 1, con primario-backup, elección Bully con épocas, log replicado y relojes de Lamport— y lo desplegamos en un cluster **Kubernetes (k3s)** de tres máquinas.
+<p align="center">
+  <b>Truco por turnos para dos jugadores, servido por tres nodos que se replican entre sí,<br>
+  sobre un cluster Kubernetes de tres máquinas. Se apaga una máquina y la partida sigue.</b>
+</p>
 
-- **Kubernetes** se ocupa de que los procesos existan: los reinicia, los reubica cuando se apaga una máquina y los actualiza.
-- **Trucardo** sigue decidiendo quién es el primario y cuál es el estado de cada mesa.
+<p align="center">
+  <img alt="k3s v1.37" src="https://img.shields.io/badge/k3s-v1.37-7c3aed">
+  <img alt="Python 3.15" src="https://img.shields.io/badge/Python-3.15-1d6fe0">
+  <img alt="OpenTelemetry" src="https://img.shields.io/badge/OpenTelemetry-trazas%20·%20métricas%20·%20logs-ec4899">
+  <img alt="Docker" src="https://img.shields.io/badge/Docker-compose-16a34a">
+</p>
 
-Además:
-- **Fase recomendada:** cada nodo guarda su log en un **volumen**, así un apagón de las tres máquinas no pierde las partidas.
-- **Fases extra:** observabilidad con **OpenTelemetry** (trazas en Jaeger, métricas y logs en Grafana) y almacenamiento replicado con **Longhorn**, para que el nodo se mude de máquina con su disco.
+<p align="center">
+  <a href="#probalo-en-un-minuto">Probalo en un minuto</a> ·
+  <a href="#en-kubernetes">En Kubernetes</a> ·
+  <a href="#provocá-fallas">Provocá fallas</a> ·
+  <a href="#en-tres-máquinas-reales">Tres máquinas reales</a>
+</p>
 
-**Estado (25/11/2026).** Están hechas la fase de despliegue, la recomendada (log en disco) y la de OpenTelemetry (trazas, métricas y logs). De la fase opcional de Longhorn está el generador (`--almacenamiento longhorn`, #30), sin probar en un cluster. Los experimentos (#31) quedan como trabajo futuro (ver [Límites](#límites-y-trabajo-futuro)). El detalle está en la tabla de estado al final de [PLAN.md](PLAN.md).
+---
 
-## Arquitectura: dos capas
+## Qué es
 
+**Trucardo** es un servicio de truco distribuido. Dos jugadores se sientan a una mesa desde su terminal, y tres nodos guardan la partida: uno es el **primario**, que recibe las jugadas, y los otros dos son **backups**, que reciben cada jugada replicada. Si el primario se cae, los backups lo notan en tres segundos, eligen otro y los clientes siguen jugando contra el nuevo.
+
+Este proyecto lo lleva a **k3s**, un Kubernetes liviano, repartido en tres máquinas:
+
+```mermaid
+flowchart LR
+    leo([🃏 leo]) --> N3
+    beto([🃏 beto]) --> N3
+    subgraph k3s["Cluster k3s"]
+        direction LR
+        subgraph m1["maquina1 · servidor"]
+            N3["N3 · primario"]
+        end
+        subgraph m2["maquina2 · agente"]
+            N1["N1 · backup"]
+        end
+        subgraph m3["maquina3 · agente"]
+            N2["N2 · backup"]
+        end
+        N3 -- "réplica y latido" --> N1
+        N3 -- "réplica y latido" --> N2
+    end
 ```
-  clientes, desde fuera del cluster (NodePort: puerto + 21000)
-                │
-                ▼
-┌─ k3s ─────────────────────────────────────────────────────────┐
-│                                                               │
-│    maquina1: Pod N3, primario                                 │
-│    disco: /var/lib/trucardo/nodo3                             │
-│       │                     │                                 │
-│       │ réplica y latido    │ réplica y latido                │
-│       ▼                     ▼                                 │
-│    maquina2: Pod N1,     maquina3: Pod N2,                    │
-│    backup                backup                               │
-│    disco: .../nodo1      disco: .../nodo2                     │
-│                                                               │
-└───────────────────────────────────────────────────────────────┘
-```
 
-**Kubernetes hace que los procesos existan.** El generador (`despliegue/manifiestos.py`) arma, desde la misma `TRUCARDO_NODOS` del Proyecto 1:
+Cada capa hace lo suyo:
 
-- un Deployment de una réplica por nodo, con estrategia `Recreate`. Los nodos tienen id: no son réplicas intercambiables (D3, D4);
-- un Service por nodo, con el mismo nombre que el host del nodo y una IP fija. Cada Pod lo resuelve por `hostAliases`, sin depender del DNS del cluster (D5, #52);
-- una *liveness probe* más lenta que la detección de Trucardo, así Trucardo decide primero y Kubernetes repara después (D7);
-- 10 s de tolerancia a una máquina caída, así el Pod se reubica en alrededor de un minuto, y anti-afinidad preferida, para repartir los nodos sin impedir la reubicación (D8, D9);
-- un volumen `hostPath` por nodo, `/var/lib/trucardo/nodo<id>`, en la máquina donde corre (D14).
+| | Se ocupa de | Cuándo actúa |
+| --- | --- | --- |
+| **Trucardo** | quién es el primario y qué pasó en cada mesa | a los **3 s** de que el primario deje de latir |
+| **Kubernetes** | que cada nodo exista: lo reinicia, lo muda de máquina, lo actualiza | en **≈1 min**, cuando una máquina no responde |
 
-**Trucardo decide quién manda y qué pasó en cada mesa.** No cambió su protocolo del Proyecto 1:
+Cada nodo guarda su log en disco, así que un apagón de las tres máquinas no pierde las partidas. Y, si se quiere mirar por dentro, se suman **trazas, métricas y logs** con OpenTelemetry y un **visor en vivo** que dibuja el cluster con cada mensaje que viaja.
 
-- primario-backup con un log replicado;
-- elección Bully con épocas;
-- relojes de Lamport.
+## Cómo se ve
 
-Se le sumaron tres cosas:
+<table>
+  <tr>
+    <td width="50%"><img src="imagenes/cliente.png" alt="Pantalla del cliente: marcador, la mesa con las cartas jugadas, tus cartas y el menú de jugadas"></td>
+    <td width="50%">
+      <b>El juego, en la terminal.</b><br>
+      Cada jugador ve el marcador, las cartas de la mesa, las suyas y lo que puede hacer: tirar una carta, cantar envido o truco, o irse al mazo. Elige con una tecla.
+      <br><br>
+      <img src="imagenes/quien-es.png" alt="Tabla de quien_es: nodo 3 primario, nodos 1 y 2 backup, con época, último seq y reloj">
+      <br>
+      <code>quien_es</code> muestra qué cree cada nodo: quién es el primario, en qué época está y hasta qué operación tiene.
+    </td>
+  </tr>
+</table>
 
-- **el log en disco** (#22): cada op se escribe con `fsync` antes de confirmarse;
-- **la recuperación al estilo Raft** (#23, D15): un nodo que vuelve, en la misma máquina o en otra, recorta lo que difiere del primario y recibe sólo lo que le falta;
-- **la telemetría opcional** (#11 a #28): trazas, métricas y logs por OpenTelemetry.
+**El visor en vivo** muestra el cluster como una maqueta: cada máquina, el nodo que corre en ella, la red y los jugadores. Cada componente tiene su color, y cada mensaje viaja como un punto con un cartel que dice qué lleva y de quién a quién.
 
-Ninguna capa sabe de la otra. Kubernetes no sabe quién es el primario, y Trucardo no sabe que corre en Kubernetes: sólo ve nodos que se caen y vuelven.
+<p align="center">
+  <img src="imagenes/visor-mensajes.png" alt="Visor con mensajes en viaje: réplicas de N1 a N2 y N3, latidos y una jugada de ana a N1" width="820">
+</p>
 
-## Documentos
+Cuando se apaga una máquina, el visor la muestra gris, con su luz en rojo, y los nodos que quedan eligen un primario nuevo:
 
-| Documento | Para qué |
-| --- | --- |
-| [REQUISITOS.md](REQUISITOS.md) | Qué tiene que hacer el proyecto, glosario y qué queda fuera de alcance |
-| [PLAN.md](PLAN.md) | Reglas de trabajo, decisiones de diseño y las issues por fase. **Leer la sección 1 antes de tocar el código** |
-| [registro-de-construccion/](registro-de-construccion/) | Un registro por issue resuelta: qué se hizo y por qué |
+<p align="center">
+  <img src="imagenes/visor-falla.png" alt="Visor con la máquina 3 apagada: N2 es el primario nuevo en la época 7" width="820">
+</p>
 
-## Cómo correrlo hoy (una sola máquina, con Docker)
+**Con telemetría**, cada jugada queda como una traza en Jaeger, y Grafana tiene un tablero con el rol, la época y el atraso de cada nodo:
 
-Hace falta Docker con el plugin `compose`. Todos los comandos se corren desde la raíz del repo.
+<table>
+  <tr>
+    <td width="50%"><img src="experimentos/capturas/jugada.png" alt="Traza de una jugada en Jaeger: el cliente, el primario y las dos réplicas"></td>
+    <td width="50%"><img src="experimentos/capturas/tablero-caida.png" alt="Tablero de Grafana durante una caída: cambio de primario y de época"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Una jugada: del cliente al primario, y del primario a los dos backups</sub></td>
+    <td align="center"><sub>El tablero mientras cae un primario y otro toma su lugar</sub></td>
+  </tr>
+</table>
 
-Levantar los tres nodos (los logs salen mezclados, con el nombre de cada nodo adelante):
+## Probalo en un minuto
+
+Sólo hace falta Docker con el plugin `compose`. Todos los comandos se corren desde la raíz del repo.
+
+Levantá los tres nodos:
 
 ```bash
 docker compose up --build
 ```
 
-Cada nodo guarda su log en un volumen (`datos1` a `datos3`), así que las partidas sobreviven a `docker compose down`. Para arrancar de cero, borrá también los volúmenes:
-
-```bash
-docker compose down -v
-```
-
-Un jugador en cada una de otras dos terminales:
+En otras dos terminales, un jugador en cada una:
 
 ```bash
 docker compose run --rm cliente leo
@@ -89,33 +121,48 @@ docker compose run --rm cliente leo
 docker compose run --rm cliente beto
 ```
 
-Correr la suite de tests (`--build` hace que la imagen tome el código actual):
+En una cuarta, mirá quién es el primario, actualizado cada segundo:
 
 ```bash
-docker compose run --build --rm tests
+docker compose run --rm quien_es --seguir
 ```
 
-Una vez por clon, activar el *hook* que corre la suite antes de cada commit y lo rechaza si falla:
+Ahora apagá al primario (al arrancar suele ser el nodo 3) y seguí jugando: en unos segundos otro nodo toma su lugar.
 
 ```bash
-git config core.hooksPath .githooks
+docker compose stop nodo3
 ```
 
-En GitHub, cada PR corre el mismo *hook* como verificación (`.github/workflows/suite.yml`).
+Cuando vuelve, se pone al día solo:
 
-La guía completa del Proyecto 1 está en el [README del tag `proyecto1-base`](https://github.com/cosmosnehu77/trucardo-k3s/blob/proyecto1-base/README.md). Ahí se explica cómo jugar, cómo correrlo en varias computadoras sin Kubernetes, cómo matar al primario y cómo seguir una partida.
+```bash
+docker compose start nodo3
+```
 
-## Cluster local de desarrollo (k3s en contenedores)
+Para ver la historia de una mesa, operación por operación:
 
-Simula tres máquinas con k3s en contenedores (`maquina1` servidor, `maquina2` y `maquina3` agentes), con IPs fijas `172.30.0.11` a `172.30.0.13`. La versión de k3s está fijada en `despliegue/cluster-local/compose.yaml`. El `python3` de la compu sólo corre el generador (biblioteca estándar); todo lo demás va en contenedores.
+```bash
+docker compose run --rm historial
+```
 
-Construí la imagen `trucardo:local`:
+Cada nodo guarda su log en un volumen, así que las partidas sobreviven a `docker compose down`. Para empezar de cero:
+
+```bash
+docker compose down -v
+```
+
+> [!TIP]
+> **El visor, sin levantar nada.** `python3 -m http.server -d visor/pagina 8000` y abrí <http://localhost:8000/?demo>: simula un cluster en el navegador, con una máquina que se cae una vez por minuto.
+
+## En Kubernetes
+
+El cluster local simula tres máquinas con k3s dentro de contenedores: `maquina1` es el servidor y `maquina2` y `maquina3` son agentes, con IPs `172.30.0.11` a `172.30.0.13`.
+
+**1. Construí la imagen y levantá el cluster.**
 
 ```bash
 docker compose build nodo1
 ```
-
-Levantá el cluster:
 
 ```bash
 docker compose -f despliegue/cluster-local/compose.yaml up -d
@@ -127,13 +174,13 @@ Esperá a que las tres máquinas estén `Ready`:
 docker compose -f despliegue/cluster-local/compose.yaml exec maquina1 kubectl get nodes
 ```
 
-Cargá la imagen en las tres máquinas:
+**2. Cargá la imagen en las tres máquinas.**
 
 ```bash
 sh despliegue/cluster-local/cargar-imagen.sh
 ```
 
-Generá los manifiestos y aplicalos en el cluster:
+**3. Generá los manifiestos y aplicalos.** El generador arma un nodo por máquina a partir de la lista de nodos:
 
 ```bash
 TRUCARDO_NODOS="1@nodo1:9501:9601,2@nodo2:9502:9602,3@nodo3:9503:9603" python3 -m despliegue.manifiestos --imagen trucardo:local > trucardo.json
@@ -143,70 +190,77 @@ TRUCARDO_NODOS="1@nodo1:9501:9601,2@nodo2:9502:9602,3@nodo3:9503:9603" python3 -
 docker compose -f despliegue/cluster-local/compose.yaml exec -T maquina1 kubectl apply -f - < trucardo.json
 ```
 
-Verificá los Pods (uno por máquina):
+Vas a ver un Pod por máquina:
 
 ```bash
 docker compose -f despliegue/cluster-local/compose.yaml exec maquina1 kubectl get pods -o wide
 ```
 
-El cliente corre fuera del cluster y entra por `NodePort` (puerto + 21000). Obtené el valor de `TRUCARDO_NODOS` para clientes externos:
+**4. Jugá.** Los clientes corren fuera del cluster y entran por la IP de una máquina, en el puerto del nodo + 21000:
 
 ```bash
-TRUCARDO_NODOS="1@nodo1:9501:9601,2@nodo2:9502:9602,3@nodo3:9503:9603" python3 -m despliegue.manifiestos --clientes 172.30.0.11
+docker run --rm -it --network trucardo-k3s_maquinas -e TRUCARDO_NODOS="1@172.30.0.11:30501:30601,2@172.30.0.11:30502:30602,3@172.30.0.11:30503:30603" trucardo:local python -m cliente.cliente leo
 ```
 
-Reemplazá `<valor>` por esa salida y corré un jugador en cada una de dos terminales:
+Para otro jugador o para `quien_es`, el mismo comando cambiando el final: `python -m cliente.cliente beto` o `python -m cliente.quien_es --seguir`. Si cambiás la lista de nodos, el valor para los clientes sale de `python3 -m despliegue.manifiestos --clientes 172.30.0.11`.
 
-```bash
-docker run --rm -it --network trucardo-k3s_maquinas -e TRUCARDO_NODOS="<valor>" trucardo:local python -m cliente.cliente leo
-```
-
-```bash
-docker run --rm -it --network trucardo-k3s_maquinas -e TRUCARDO_NODOS="<valor>" trucardo:local python -m cliente.cliente beto
-```
-
-**Telemetría (opcional).** Con `--telemetria`, el generador suma un *Collector* de OpenTelemetry, que reparte lo que mandan los nodos: las trazas a Jaeger, las métricas a Prometheus y los logs a Loki. Suma también Grafana, con un tablero de Trucardo. Primero cargá las imágenes en las máquinas:
-
-```bash
-for i in jaegertracing/jaeger:2.23.0 otel/opentelemetry-collector:0.165.0 prom/prometheus:v3.16.0 grafana/loki:3.6.22 grafana/grafana:13.3.2; do sh despliegue/cluster-local/cargar-imagen.sh $i; done
-```
-
-Después generá los manifiestos con `--telemetria` y aplicalos como antes. Quedan:
-
-- Grafana en <http://172.30.0.11:30300>, con el tablero «Trucardo». Desde una línea de log, el campo `trace_id` lleva a su traza;
-- Jaeger en <http://172.30.0.11:30686>;
-- Prometheus en <http://172.30.0.11:30090>;
-- para que un cliente externo mande sus trazas, `-e OTEL_EXPORTER_OTLP_ENDPOINT=http://172.30.0.11:30318`.
-
-Sin Kubernetes, `OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4318 docker compose --profile telemetria up --build` levanta lo mismo, con Grafana en <http://localhost:3000>.
-
-**Visor en vivo (opcional).** Con `--visor`, el generador suma un Pod que dibuja el cluster como una figura isométrica: las tres máquinas, el Pod de cada nodo con su rol, el plano de control, la red, los módulos de telemetría y los jugadores. Cada segundo lee la API de Kubernetes (con una cuenta de sólo lectura), le pregunta a cada nodo por sus mesas y, si hay telemetría, lee las trazas de Jaeger para dibujar los mensajes entre servicios. Sin telemetría, deduce los latidos, las réplicas y las jugadas del estado de los nodos. Cada componente tiene su color (el primario, pleno; los backups, tenues), y cada mensaje viaja con el color de quien lo manda y una etiqueta con qué lleva y de quién a quién, por ejemplo «réplica op 475 · N2→N3». Un clic en cada pieza explica qué hace y muestra sus datos del momento. Arriba de la figura, la barra «Mostrar» prende o apaga cada tipo de mensaje (jugadas, réplicas, latidos, épocas y elecciones, telemetría), los relojes de Lamport de cada nodo, las etiquetas y la cámara lenta; para presentar conviene dejar sólo lo que se está explicando.
-
-```bash
-TRUCARDO_NODOS="1@nodo1:9501:9601,2@nodo2:9502:9602,3@nodo3:9503:9603" python3 -m despliegue.manifiestos --imagen trucardo:local --telemetria --visor > trucardo.json
-```
-
-Después de aplicarlo, el visor queda en <http://172.30.0.11:30808>. Con `?demo` al final, la página simula un cluster (sin pedirle nada al servidor), y la máquina 3 se cae una vez por minuto. Para que los jugadores aparezcan en las trazas, corré el cliente con `-e OTEL_EXPORTER_OTLP_ENDPOINT=http://172.30.0.11:30318`.
-
-La figura se arma con el kit isométrico de [anatomy](https://github.com/wheresryan22/anatomy) (MIT, copiado en `visor/figura/kit/`). Si se cambia algo en `visor/figura/`, se regenera la página con `node visor/figura/build.mjs`, que escribe `visor/pagina/index.html`.
-
-Para consultar quién es el primario desde afuera:
-
-```bash
-docker run --rm -it --network trucardo-k3s_maquinas -e TRUCARDO_NODOS="<valor>" trucardo:local python -m cliente.quien_es
-```
-
-Si querés correr `kubectl` desde la compu (opcional), el *kubeconfig* queda en `despliegue/cluster-local/salida/kubeconfig.yaml` apuntando a `127.0.0.1:6443`.
-
-Apagá el cluster con:
+**5. Apagalo** (los logs de los nodos se conservan; para borrarlos, sumá `-v`):
 
 ```bash
 docker compose -f despliegue/cluster-local/compose.yaml down
 ```
 
-Cada máquina guarda los logs de sus nodos en un volumen montado en `/var/lib/trucardo`, así que sobreviven a `down`. Para borrarlos, sumá `-v`.
+### Telemetría y visor
 
-## Despliegue en tres máquinas reales
+El generador suma dos extras con sus opciones:
+
+| Opción | Qué agrega | Dónde se ve |
+| --- | --- | --- |
+| `--telemetria` | Collector de OpenTelemetry, Jaeger, Prometheus, Loki y Grafana con el tablero «Trucardo» | Grafana <http://172.30.0.11:30300> · Jaeger <http://172.30.0.11:30686> · Prometheus <http://172.30.0.11:30090> |
+| `--visor` | El visor en vivo, con barra «Mostrar» para elegir qué mensajes ver | <http://172.30.0.11:30808> |
+
+Primero cargá las imágenes de la telemetría en las máquinas:
+
+```bash
+for i in jaegertracing/jaeger:2.23.0 otel/opentelemetry-collector:0.165.0 prom/prometheus:v3.16.0 grafana/loki:3.6.22 grafana/grafana:13.3.2; do sh despliegue/cluster-local/cargar-imagen.sh $i; done
+```
+
+Después generá los manifiestos con las dos opciones y aplicalos como en el paso 3:
+
+```bash
+TRUCARDO_NODOS="1@nodo1:9501:9601,2@nodo2:9502:9602,3@nodo3:9503:9603" python3 -m despliegue.manifiestos --imagen trucardo:local --telemetria --visor > trucardo.json
+```
+
+Para que los jugadores también aparezcan en las trazas, sumá `-e OTEL_EXPORTER_OTLP_ENDPOINT=http://172.30.0.11:30318` al `docker run` del cliente.
+
+Sin Kubernetes, la misma telemetría se levanta con `OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4318 docker compose --profile telemetria up --build`, con Grafana en <http://localhost:3000>.
+
+> [!TIP]
+> En el visor, un clic en cada pieza explica qué es y muestra sus datos del momento. Para presentar, conviene dejar prendidos sólo los mensajes que se están explicando (por ejemplo, jugadas y réplicas) y activar la cámara lenta.
+
+## Provocá fallas
+
+Con el cluster local andando y el visor abierto, definí un atajo:
+
+```bash
+C="docker compose -f despliegue/cluster-local/compose.yaml"
+```
+
+| Qué probar | Comando | Qué se ve |
+| --- | --- | --- |
+| Matar el Pod del primario | `$C exec maquina1 kubectl delete pod -l app=trucardo,nodo=3` | Los backups eligen otro primario en segundos; Kubernetes crea un Pod nuevo, que vuelve como backup y se pone al día |
+| Apagar una máquina | `$C stop maquina3` | Si tenía al primario, otro toma su lugar; al minuto, su nodo renace en otra máquina |
+| Volver a prenderla | `$C start maquina3` | La máquina vuelve a `Ready` y acepta Pods de nuevo |
+| Apagar el servidor k3s | `$C stop maquina1` | El juego sigue: lo que ya corre no depende del plano de control |
+
+[experimentos/README.md](experimentos/README.md) tiene 19 casos con su guion, lo que se espera y la evidencia de una corrida real: fallas de proceso y de máquina, una partición de red, un apagón total, y cómo se ve cada uno en Jaeger y en Grafana.
+
+## En tres máquinas reales
+
+<details>
+<summary><b>Guía paso a paso</b>: tres computadoras Linux con <code>systemd</code> en la misma red</summary>
+
+<br>
 
 Hacen falta tres computadoras Linux con `systemd` en la misma red, cada una con IP fija o reservada, un nombre de host distinto (`hostname`), `sudo` y `curl`. Además, una «compu de armado» con Docker, `python3` y este repo (puede ser una de las tres).
 
@@ -224,21 +278,21 @@ docker compose build nodo1
 docker save trucardo:local -o trucardo.tar
 ```
 
-Generá los manifiestos desde la raíz del repo:
+Generá los manifiestos:
 
 ```bash
 TRUCARDO_NODOS="1@nodo1:9501:9601,2@nodo2:9502:9602,3@nodo3:9503:9603" python3 -m despliegue.manifiestos --imagen trucardo:local > trucardo.json
 ```
 
-El generador fija la IP de cada Service (`10.43.0.101` para el nodo 1, y así), para que los nodos se encuentren sin depender de CoreDNS. Esas IPs están dentro del rango de Services que k3s usa por defecto, `10.43.0.0/16`. Si instalás k3s con otro `--service-cidr`, cambialas en `despliegue/manifiestos.py`.
+Cada nodo tiene una IP de Service fija (`10.43.0.101` para el nodo 1, y así), dentro del rango que k3s usa por defecto, `10.43.0.0/16`. Si instalás k3s con otro `--service-cidr`, cambialas en `despliegue/manifiestos.py`.
 
-Consultá la versión de k3s fijada en el cluster local y anotala (va donde dice `<version>` más abajo):
+Anotá la versión de k3s (va donde dice `<version>` más abajo):
 
 ```bash
 sed -n 's|.*rancher/k3s:\(v.*\)-\(k3s.*\)|\1+\2|p' despliegue/cluster-local/compose.yaml
 ```
 
-Copiá `trucardo.tar` a las tres máquinas y `trucardo.json` a `maquina1` (con `scp` o en un pendrive):
+Copiá `trucardo.tar` a las tres máquinas y `trucardo.json` a `maquina1`:
 
 ```bash
 scp trucardo.tar trucardo.json usuario@192.168.0.11:
@@ -254,7 +308,7 @@ scp trucardo.tar usuario@192.168.0.13:
 
 ### 2. En las tres máquinas: firewall
 
-Si `sudo ufw status` dice `inactive`, salteá este paso. Si está activo, las tres primeras reglas son las que pide k3s y las otras dejan pasar a los clientes y el tráfico interno del cluster:
+Si `sudo ufw status` dice `inactive`, salteá este paso. Si está activo:
 
 ```bash
 sudo ufw allow 6443/tcp            # API de Kubernetes (los agentes se unen al servidor)
@@ -266,8 +320,6 @@ sudo ufw allow from 10.43.0.0/16   # Services
 ```
 
 ### 3. En maquina1: servidor
-
-Instalá el servidor k3s con la `<version>` del paso 1:
 
 ```bash
 curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=<version> sh -s - server --disable traefik --disable metrics-server
@@ -281,15 +333,11 @@ sudo cat /var/lib/rancher/k3s/server/node-token
 
 ### 4. En maquina2 y maquina3: agentes
 
-Uní cada agente al servidor reemplazando `<version>` y `<token>`:
-
 ```bash
 curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=<version> K3S_URL=https://192.168.0.11:6443 K3S_TOKEN=<token> sh -s - agent
 ```
 
 ### 5. En maquina1: verificar
-
-Esperá a que las tres máquinas aparezcan `Ready`:
 
 ```bash
 sudo k3s kubectl get nodes -o wide
@@ -297,15 +345,11 @@ sudo k3s kubectl get nodes -o wide
 
 ### 6. En las tres: cargar la imagen
 
-En `maquina1`, `maquina2` y `maquina3`, importá la imagen en el containerd de k3s:
-
 ```bash
 sudo k3s ctr images import trucardo.tar
 ```
 
-### 7. En maquina1: aplicar y ver los Pods
-
-Aplicá los manifiestos y verificá que corra un Pod por máquina:
+### 7. En maquina1: aplicar
 
 ```bash
 sudo k3s kubectl apply -f trucardo.json
@@ -317,59 +361,10 @@ sudo k3s kubectl get pods -o wide
 
 ### 8. Jugar
 
-Desde la compu de armado (o cualquier compu de la red con Docker y la imagen `trucardo:local`), obtené el valor de `TRUCARDO_NODOS` para clientes externos (`NodePort`, puerto + 21000):
+Desde cualquier compu de la red con Docker y la imagen `trucardo:local`:
 
 ```bash
-TRUCARDO_NODOS="1@nodo1:9501:9601,2@nodo2:9502:9602,3@nodo3:9503:9603" python3 -m despliegue.manifiestos --clientes 192.168.0.11
-```
-
-Reemplazá `<valor>` por esa salida y corré un jugador en cada una de dos terminales o computadoras:
-
-```bash
-docker run --rm -it --network host -e TRUCARDO_NODOS="<valor>" trucardo:local python -m cliente.cliente leo
-```
-
-```bash
-docker run --rm -it --network host -e TRUCARDO_NODOS="<valor>" trucardo:local python -m cliente.cliente beto
-```
-
-Para ver quién es el primario:
-
-```bash
-docker run --rm -it --network host -e TRUCARDO_NODOS="<valor>" trucardo:local python -m cliente.quien_es
-```
-
-### Opcional: volumen replicado con Longhorn
-
-> [!WARNING]
-> **Sin probar.** El generador está testeado, pero Longhorn no corre en el cluster local (ver [Límites](#límites-y-trabajo-futuro)), y todavía no se probó en máquinas reales.
-
-Con Longhorn, cada nodo guarda su log en un volumen replicado en las tres máquinas, que viaja con el Pod si se muda. Longhorn necesita `open-iscsi` en cada máquina. En Debian o Ubuntu, en las tres:
-
-```bash
-sudo apt install -y open-iscsi && sudo systemctl enable --now iscsid && sudo modprobe iscsi_tcp
-```
-
-En `maquina1`, instalá Longhorn (versión fija, D17) y esperá a que todos sus Pods estén `Running`:
-
-```bash
-sudo k3s kubectl apply -f https://raw.githubusercontent.com/longhorn/longhorn/v1.13.0/deploy/longhorn.yaml
-```
-
-```bash
-sudo k3s kubectl -n longhorn-system get pods
-```
-
-Hacé que, si se apaga una máquina, Longhorn borre el Pod de un Deployment y libere su volumen. Si no, el Pod nuevo no puede montarlo en otra máquina:
-
-```bash
-sudo k3s kubectl -n longhorn-system patch settings.longhorn.io node-down-pod-deletion-policy --type merge -p '{"value":"delete-both-statefulset-and-deployment-pod"}'
-```
-
-En la compu de armado, generá los manifiestos con `--almacenamiento longhorn` (un PVC por nodo en lugar del `hostPath`) y aplicalos como en el paso 7:
-
-```bash
-TRUCARDO_NODOS="1@nodo1:9501:9601,2@nodo2:9502:9602,3@nodo3:9503:9603" python3 -m despliegue.manifiestos --imagen trucardo:local --almacenamiento longhorn > trucardo.json
+docker run --rm -it --network host -e TRUCARDO_NODOS="1@192.168.0.11:30501:30601,2@192.168.0.11:30502:30602,3@192.168.0.11:30503:30603" trucardo:local python -m cliente.cliente leo
 ```
 
 ### 9. Desinstalar
@@ -396,47 +391,66 @@ sudo rm -rf /var/lib/trucardo
 
 - **Logs:** `sudo journalctl -u k3s` (servidor) y `sudo journalctl -u k3s-agent` (agentes).
 - **Un agente no aparece en `get nodes`:** desde ese agente, `curl -k https://192.168.0.11:6443` tiene que contestar (un `401` en JSON está bien); si no, revisá el firewall y la IP.
-- **Máquinas clonadas con el mismo `hostname`:** k3s no deja entrar a la segunda; cambiá el `hostname` o sumá `--node-name <nombre>` al comando de instalación.
+- **Máquinas clonadas con el mismo `hostname`:** cambiá el `hostname` o sumá `--node-name <nombre>` al comando de instalación.
 - **Máquinas con varias interfaces de red:** sumá `--node-ip <ip de esa máquina>` al comando de instalación.
 - **Pods en `ErrImagePull` o `ImagePullBackOff`:** falta el paso 6 en esa máquina.
 
-## Experimentos
+</details>
 
-[experimentos/README.md](experimentos/README.md) tiene 19 casos, cada uno con su guion, lo esperado, la evidencia con hora y el porqué. Se corrieron en el cluster local, y cada uno se puede repetir.
+<details>
+<summary><b>Opcional: disco replicado con Longhorn</b> (sin probar en máquinas reales)</summary>
 
-| Casos | Qué muestran |
-| --- | --- |
-| 1 a 6 | Fallas de proceso y de infraestructura: borrar el Pod del primario, colgar un nodo, apagar la máquina de un backup y la del primario, actualizar la versión con una partida en curso, apagar el servidor k3s |
-| 7 | El límite: una partición de red deja dos primarios |
-| 8 a 11 | Persistencia: un backup reiniciado, un nodo que se muda con un log viejo, el apagón total y la operación confirmada sin acks que se pierde |
-| 12 a 15 | Trazas: una jugada replicada, una elección, una puesta al día y el cerebro dividido en Jaeger |
-| 16 a 19 | Métricas y logs: el tablero ante una caída y ante el cerebro dividido, de un log a su traza, y qué agrega OpenTelemetry a `kubectl` |
+<br>
 
-## Límites y trabajo futuro
+Con Longhorn, cada nodo guarda su log en un volumen replicado en las tres máquinas, que viaja con el Pod si se muda. Necesita `open-iscsi` en cada máquina. En Debian o Ubuntu, en las tres:
 
-- **Sin quórum, una partición deja dos primarios** (casos 7, 15 y 17). Las épocas lo resuelven al curarse, pero las ops que el primario viejo confirmó solo se pierden (caso 11). Evitarlo pide confirmar sólo con la mayoría, como Raft.
-- **Después de un apagón, el primero en volver se corona solo** (caso 10). Si es un backup atrasado, los que vuelven después pierden lo que él no tenía. Es el mismo límite.
-- **El disco es de la máquina, no del nodo** (D14). Un nodo que se muda arranca con lo que haya en la máquina nueva y se pone al día por la red. La fase de Longhorn iba a mostrar la alternativa: un volumen replicado que viaja con el Pod. El generador ya lo arma (#30), pero falta probarlo y comparar (#31). En el cluster local no se puede: Longhorn expone cada volumen por iSCSI, y el iniciador iSCSI del kernel sólo funciona en la red del host, no en la de un contenedor. Hace falta probarlo en máquinas reales o en VMs.
-- **Kubernetes no detecta un nodo colgado** (caso 2). La *probe* TCP la contesta el kernel. Trucardo lo resuelve con sus latidos.
-- **Los clientes entran por la IP de una máquina.** Si esa máquina se apaga, hay que cambiar de IP (caso 6).
-- **La telemetría guarda su historia en el Pod.** Si Prometheus, Loki o Jaeger se mudan de máquina, se pierde. Una partición también corta la telemetría del lado aislado (caso 15).
+```bash
+sudo apt install -y open-iscsi && sudo systemctl enable --now iscsid && sudo modprobe iscsi_tcp
+```
 
-## Cómo se trabaja
+En `maquina1`, instalá Longhorn y esperá a que sus Pods estén `Running`:
 
-Resumen de [PLAN.md](PLAN.md), sección 1:
+```bash
+sudo k3s kubectl apply -f https://raw.githubusercontent.com/longhorn/longhorn/v1.13.0/deploy/longhorn.yaml
+```
 
-- Una issue a la vez, en orden. Una rama `issue-NN-descripcion` por issue.
-- Test que falla primero; después el cambio más chico que lo hace pasar.
-- **Un solo commit por issue**, y sólo si pasa la suite completa.
-- Un PR por issue, que se mergea con *merge commit*.
-- La rama de una issue se borra cuando se crea la de la siguiente.
-- Cada issue deja su registro en `registro-de-construccion/`.
-- Principios: YAGNI, DRY y Clean Code según la skill `ub-mode` (`.claude/skills/ub-mode/`).
+```bash
+sudo k3s kubectl -n longhorn-system get pods
+```
+
+Hacé que, si se apaga una máquina, Longhorn libere el volumen del Pod para que pueda montarse en otra:
+
+```bash
+sudo k3s kubectl -n longhorn-system patch settings.longhorn.io node-down-pod-deletion-policy --type merge -p '{"value":"delete-both-statefulset-and-deployment-pod"}'
+```
+
+Generá los manifiestos con `--almacenamiento longhorn` y aplicalos como en el paso 7:
+
+```bash
+TRUCARDO_NODOS="1@nodo1:9501:9601,2@nodo2:9502:9602,3@nodo3:9503:9603" python3 -m despliegue.manifiestos --imagen trucardo:local --almacenamiento longhorn > trucardo.json
+```
+
+Longhorn no corre en el cluster local: expone cada volumen por iSCSI, y eso no funciona dentro de un contenedor.
+
+</details>
+
+## Tests
+
+```bash
+docker compose run --build --rm tests
+```
+
+## Lo que no cubre
+
+- **Una partición de red deja dos primarios** hasta que se cura. Las épocas ordenan todo al reunirse, pero lo que confirmó el primario aislado se pierde.
+- **Después de un apagón total, el primero en volver se corona.** Si es un backup atrasado, lo que él no tenía se pierde.
+- **Los clientes entran por la IP de una máquina.** Si esa máquina se apaga, hay que apuntarlos a otra.
+- **La telemetría guarda su historia en el Pod.** Si Jaeger, Prometheus o Loki se mudan de máquina, empiezan de cero.
 
 ## Créditos
 
-Basado en **Trucardo**, el Proyecto 1 de Sistemas Distribuidos 2026: el juego, el protocolo primario-backup, la elección Bully con épocas, el log replicado, los relojes de Lamport y los clientes. La historia completa de ese desarrollo, con sus autores, se conserva en este repositorio, y su estado final está en el tag `proyecto1-base`.
+Hecho por **Nehuén García** y **Alan Viera** para la promoción de Sistemas Distribuidos 2026 (UNPSJB).
 
-El despliegue en k3s, la persistencia, la observabilidad y los experimentos son de este trabajo de promoción.
+Se basa en **Trucardo**, el Proyecto 1 de la materia: el juego, el protocolo primario-backup, la elección Bully con épocas, el log replicado, los relojes de Lamport y los clientes. Su versión original está en el tag [`proyecto1-base`](https://github.com/cosmosnehu77/trucardo-k3s/tree/proyecto1-base), con su propia guía para jugar en varias computadoras sin Kubernetes.
 
-El visor usa el kit isométrico de [anatomy](https://github.com/wheresryan22/anatomy), con licencia MIT (`visor/figura/kit/LICENSE`). Cada issue dejó su registro en [registro-de-construccion/](registro-de-construccion/), con su autor y cómo se trabajó.
+El visor usa el kit isométrico de [anatomy](https://github.com/wheresryan22/anatomy), con licencia MIT (`visor/figura/kit/LICENSE`).
