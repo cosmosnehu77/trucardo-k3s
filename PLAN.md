@@ -853,6 +853,19 @@ Cuando lo que se agrega es una fase entera, sus issues van en su fase y acá que
 
 ---
 
+### #78 Visor: filtros para mostrar u ocultar cada tipo de mensaje
+- **Requisitos:** RF-21
+- **Tipo:** código
+- **Depende de:** #76
+- **Problema:** con todos los mensajes a la vez, en una presentación cuesta seguir uno.
+- **Qué hacer:**
+  - primero, un test: la instantánea pasa el `lamport` de cada mensaje de Jaeger;
+  - una barra «Mostrar» con jugadas, réplicas, latidos, épocas y elecciones, telemetría, relojes de Lamport, etiquetas y cámara lenta, recordada en el navegador.
+- **Criterios de aceptación:** con sólo jugadas y réplicas, se ve cada jugada y sus dos réplicas sin otros pulsos.
+- **Tests:** el de `lamport` en `tests/test_visor.py`.
+
+---
+
 ## 11. Calendario sugerido
 
 | Día | Issues | Nota |
@@ -905,6 +918,7 @@ Cuando lo que se agrega es una fase entera, sus issues van en su fase y acá que
 | #72 | Visor en vivo del cluster | ✅ |
 | #73 | Un backup queda trabado si su log diverge del primario en la misma época | ✅ |
 | #76 | Visor en tema claro, con un color por componente y etiquetas en los mensajes | ✅ |
+| #78 | Visor: filtros para mostrar u ocultar cada tipo de mensaje | ✅ |
 
 La tabla sigue el **orden de trabajo**, no el numérico.
 

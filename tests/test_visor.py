@@ -139,9 +139,9 @@ def test_mensajes_son_los_spans_cuyo_padre_es_de_otro_servicio():
 
     assert estado.mensajes([trazas]) == [
         {"ms": 1002, "de": "cliente-leo", "a": "nodo3", "tipo": "jugada jugar",
-         "seq": None, "cantidad": None},
-        {"ms": 1004, "de": "nodo3", "a": "nodo1", "tipo": "replica", "seq": None, "cantidad": None},
-        {"ms": 1005, "de": "nodo3", "a": "nodo2", "tipo": "replica", "seq": None, "cantidad": None},
+         "seq": None, "cantidad": None, "lamport": None},
+        {"ms": 1004, "de": "nodo3", "a": "nodo1", "tipo": "replica", "seq": None, "cantidad": None, "lamport": None},
+        {"ms": 1005, "de": "nodo3", "a": "nodo2", "tipo": "replica", "seq": None, "cantidad": None, "lamport": None},
     ]
 
 
@@ -153,9 +153,9 @@ def test_mensajes_dicen_que_op_llevan_y_cuantas_ops_tiene_una_puesta_al_dia():
         _span("trucardo-nodo1", "r", "p", "replica", 1_002_000_000, seq=475, lamport=900),
     )
 
-    assert [(m["tipo"], m["seq"], m["cantidad"]) for m in estado.mensajes([trazas])] == [
-        ("puesta al dia recibida", None, 130),
-        ("replica", 475, None),
+    assert [(m["tipo"], m["seq"], m["cantidad"], m["lamport"]) for m in estado.mensajes([trazas])] == [
+        ("puesta al dia recibida", None, 130, None),
+        ("replica", 475, None, 900),
     ]
 
 
