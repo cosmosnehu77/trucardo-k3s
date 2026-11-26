@@ -42,9 +42,11 @@ def _mesa(id_mesa, jugadores, estado_mesa="en_juego"):
             "creada_en": 1, "ganador": None}
 
 
-def _span(servicio, id_span, padre, nombre, inicio_ns):
+def _span(servicio, id_span, padre, nombre, inicio_ns, **atributos):
     return servicio, {"traceId": "t1", "spanId": id_span, "parentSpanId": padre,
-                      "name": nombre, "startTimeUnixNano": str(inicio_ns)}
+                      "name": nombre, "startTimeUnixNano": str(inicio_ns),
+                      "attributes": [{"key": f"trucardo.{clave}", "value": {"intValue": str(valor)}}
+                                     for clave, valor in atributos.items()]}
 
 
 def _trazas(*spans):
@@ -136,9 +138,24 @@ def test_mensajes_son_los_spans_cuyo_padre_es_de_otro_servicio():
     )
 
     assert estado.mensajes([trazas]) == [
-        {"ms": 1002, "de": "cliente-leo", "a": "nodo3", "tipo": "jugada jugar"},
-        {"ms": 1004, "de": "nodo3", "a": "nodo1", "tipo": "replica"},
-        {"ms": 1005, "de": "nodo3", "a": "nodo2", "tipo": "replica"},
+        {"ms": 1002, "de": "cliente-leo", "a": "nodo3", "tipo": "jugada jugar",
+         "seq": None, "cantidad": None},
+        {"ms": 1004, "de": "nodo3", "a": "nodo1", "tipo": "replica", "seq": None, "cantidad": None},
+        {"ms": 1005, "de": "nodo3", "a": "nodo2", "tipo": "replica", "seq": None, "cantidad": None},
+    ]
+
+
+def test_mensajes_dicen_que_op_llevan_y_cuantas_ops_tiene_una_puesta_al_dia():
+    trazas = _trazas(
+        _span("trucardo-nodo2", "p", "", "puesta al dia", 1_000_000_000),
+        _span("trucardo-nodo3", "b", "p", "puesta al dia recibida", 1_001_000_000,
+              desde=16, cantidad=130),
+        _span("trucardo-nodo1", "r", "p", "replica", 1_002_000_000, seq=475, lamport=900),
+    )
+
+    assert [(m["tipo"], m["seq"], m["cantidad"]) for m in estado.mensajes([trazas])] == [
+        ("puesta al dia recibida", None, 130),
+        ("replica", 475, None),
     ]
 
 

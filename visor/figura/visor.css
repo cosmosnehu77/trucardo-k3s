@@ -1,22 +1,41 @@
 .visor .iso-figure{margin:0}
 .visor-stage [data-part]{cursor:pointer}
 .visor-stage [data-off]{display:none}
+.visor-stage [data-color]{--t:color-mix(in oklab,var(--c) 60%,#fff);--s3:color-mix(in oklab,var(--c) 78%,#fff);--s2:var(--c);--s1:color-mix(in oklab,var(--c) 86%,#000);--s0:color-mix(in oklab,var(--c) 72%,#000);--e:color-mix(in oklab,var(--c) 52%,#000)}
+.visor-stage [data-pod^="nodo"]:not([data-primario]){--t:color-mix(in oklab,var(--c) 16%,#fff);--s3:color-mix(in oklab,var(--c) 24%,#fff);--s2:color-mix(in oklab,var(--c) 32%,#fff);--s1:color-mix(in oklab,var(--c) 40%,#fff);--s0:color-mix(in oklab,var(--c) 50%,#fff);--e:color-mix(in oklab,var(--c) 70%,#000)}
+.visor-stage :is([data-caida],[data-vacia]) [data-color],.visor-stage [data-color]:is([data-pendiente],[data-terminando],[data-noListo],[data-vacia]){--c:#b9b9be}
+.visor-stage [data-color] :is(.iso-top,.iso-fill){fill:var(--t)}
+.visor-stage [data-color] .iso-shade[data-shade="3"]{fill:var(--s3)}
+.visor-stage [data-color] .iso-shade[data-shade="2"]{fill:var(--s2)}
+.visor-stage [data-color] .iso-shade[data-shade="1"]{fill:var(--s1)}
+.visor-stage [data-color] .iso-shade[data-shade="0"]{fill:var(--s0)}
+.visor-stage [data-color] .iso-solid[data-seamless]>.iso-top{stroke:var(--t)}
+.visor-stage [data-color] .iso-solid[data-seamless]>.iso-shade[data-shade="3"]{stroke:var(--s3)}
+.visor-stage [data-color] .iso-solid[data-seamless]>.iso-shade[data-shade="2"]{stroke:var(--s2)}
+.visor-stage [data-color] .iso-solid[data-seamless]>.iso-shade[data-shade="1"]{stroke:var(--s1)}
+.visor-stage [data-color] .iso-solid[data-seamless]>.iso-shade[data-shade="0"]{stroke:var(--s0)}
+.visor-stage [data-color] .iso-line{stroke:var(--e)}
+.visor-stage [data-color] .iso-wire-end{stroke:var(--e)}
+.visor-stage [data-color] .iso-wire .iso-line{stroke:var(--c);stroke-width:1.4px}
+.visor-stage [data-color] [data-log]{stroke:var(--e)}
 .visor-stage :is([data-caida],[data-pendiente],[data-terminando],[data-noListo]) .iso-line{stroke:var(--anatomy-faint)}
-.visor-stage :is([data-caida],[data-pendiente],[data-terminando],[data-noListo]) .iso-shade,.visor-stage :is([data-caida],[data-pendiente],[data-terminando],[data-noListo]) .iso-top{fill:var(--anatomy-paper);stroke:var(--anatomy-paper)}
+.visor-stage :is([data-caida],[data-pendiente],[data-terminando],[data-noListo]) :is(.iso-shade,.iso-top,.iso-fill){fill:var(--anatomy-paper);stroke:var(--anatomy-paper)}
 .visor-stage :is([data-caida],[data-pendiente],[data-terminando]) .iso-dots circle{opacity:.08}
 .visor-stage [data-pendiente] .iso-edge{stroke-dasharray:2 2}
-.visor-stage [data-caida] [data-led]{display:none}
+.visor-stage [data-led] circle{fill:#22c55e;opacity:1}
+.visor-stage [data-caida] [data-led] circle{fill:#e5484d;opacity:1}
 .visor-stage [data-mudo] [data-log]{opacity:.25}
 .visor-stage [data-lamp]{display:none}
 .visor-stage [data-primario] [data-lamp]{display:inline}
-.visor-stage [data-vacia] .iso-line{stroke:var(--anatomy-lo)}
+.visor-stage [data-lamp] circle{fill:#facc15;opacity:1}
 .visor-stage [data-sobre]>.iso-solid>.iso-edge,.visor-stage [data-sobre]>.iso-solid>.iso-top{stroke:var(--anatomy-strong)}
 .visor-stage [data-elegido]>.iso-solid>.iso-edge{stroke:var(--anatomy-strong);stroke-width:.9px}
-.visor-stage [data-pantalla]{transition:opacity .6s var(--anatomy-ease)}
-.visor-pulso{fill:var(--anatomy-lit);pointer-events:none}
-.visor-latido{fill:var(--anatomy-mid)}
-.visor-replica{fill:var(--anatomy-hi)}
-.visor-eleccion{fill:none;stroke:var(--anatomy-lit);stroke-width:1px}
+.visor-stage [data-pantalla]{fill:var(--c)!important;transition:opacity .6s var(--anatomy-ease)}
+.visor-pulso{pointer-events:none}
+.visor-pulso circle{stroke:#fff;stroke-width:.9px}
+.visor-pulso[data-forma="anillo"] circle{fill:#fff;stroke-width:1.6px}
+.visor-pulso rect{fill:#fff;stroke-width:.8px;opacity:.94}
+.visor-pulso text{font-family:var(--anatomy-mono);font-size:8px;fill:#18181b;font-weight:600}
 .visor-panel{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:16px;margin-top:20px}
 .visor-ficha,.visor-lado{background:var(--anatomy-card);border-radius:14px;box-shadow:var(--anatomy-lift);padding:20px 22px;min-width:0}
 .visor h2{margin:0 0 8px;font-size:15px;font-weight:600;color:var(--anatomy-strong)}
@@ -30,5 +49,6 @@
 .visor-lado li{padding:3px 0;border-bottom:1px solid var(--anatomy-faint);overflow-wrap:anywhere}
 .visor-lado li b{color:var(--anatomy-strong);font-weight:600}
 .visor-lado li span,.visor-lado time{color:var(--anatomy-muted)}
+.visor-lado li i{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--c);margin-right:7px;vertical-align:-1px}
+.visor-colores{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:14px}
 @media (max-width:760px){.visor-panel{grid-template-columns:1fr}}
-.visor-stage .iso-dots[data-tone="lit"] circle{fill:var(--anatomy-lit);opacity:1}

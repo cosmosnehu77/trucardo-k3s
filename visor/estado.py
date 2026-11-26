@@ -85,9 +85,17 @@ def mensajes(trazas):
         padre = spans.get(span.get("parentSpanId"))
         if padre is None or padre[0] == servicio:
             continue
+        atributos = _atributos(span)
         lista.append({"ms": int(span["startTimeUnixNano"]) // 1_000_000,
-                      "de": padre[0], "a": servicio, "tipo": span["name"]})
+                      "de": padre[0], "a": servicio, "tipo": span["name"],
+                      "seq": atributos.get("trucardo.seq"),
+                      "cantidad": atributos.get("trucardo.cantidad")})
     return sorted(lista, key=lambda m: (m["ms"], m["a"]))
+
+
+def _atributos(span):
+    return {a["key"]: int(a["value"]["intValue"])
+            for a in span.get("attributes", []) if "intValue" in a.get("value", {})}
 
 
 def _servicio(recurso):
